@@ -37,6 +37,27 @@ BeforeAll {
 
         return $EnvVarValue
     }
+
+    function ThenError
+    {
+        param(
+            [switch] $Not,
+
+            [switch] $IsEmpty,
+
+            [String] $MatchesRegex
+        )
+
+        if ($IsEmpty)
+        {
+            $Global:Error | Should -Not:$Not -BeNullOrEmpty
+        }
+
+        if ($MatchesRegex)
+        {
+            $Global:Error | Should -Not:$Not -Match $MatchesRegex
+        }
+    }
 }
 
 AfterAll {
@@ -53,7 +74,7 @@ AfterAll {
             {
                 $forComputerArg['ForComputer'] = $true
             }
-            Remove-CEnvVariable -Name $_ -ForProcess -ForUser @forComputerArg
+            Remove-CEnvVariable -Name $_ -ForProcess -ForUser @forComputerArg -ErrorAction Ignore
         }
 }
 
@@ -113,9 +134,21 @@ Describe 'Remove-CEnvVariable' {
         }
     }
 
-    It 'ignores non-existent variable' {
-        Remove-CEnvVariable -Name "IDoNotExist" -ForProcess
-        $Global:Error | Should -BeNullOrEmpty
+    It 'fails if variable does not exist' {
+        Remove-CEnvVariable -Name 'IDoNotExist' -ForProcess -ErrorAction SilentlyContinue
+        ThenError -Not -IsEmpty
+        ThenError -MatchesRegex 'does not exist'
+    }
+
+    It 'ignores failures' {
+        Remove-CEnvVariable -Name 'IDoNotExist' -ForProcess -ErrorAction Ignore
+        ThenError -IsEmpty
+    }
+
+    It 'does not write an error when forcing removal at process scope' {
+        Remove-CEnvVariable -Name 'IDoNotExist' -ForUser -Force -ErrorAction SilentlyContinue
+        ThenError -Matches 'user-level'
+        ThenError -Not -Matches 'process-level'
     }
 
     It 'supports WhatIf' {

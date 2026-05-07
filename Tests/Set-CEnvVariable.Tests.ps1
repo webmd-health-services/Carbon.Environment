@@ -110,7 +110,7 @@ AfterAll {
             {
                 $forComputerArg['ForComputer'] = $true
             }
-            Remove-CEnvVariable -Name $_ -ForProcess -ForUser @forComputerArg
+            Remove-CEnvVariable -Name $_ -ForProcess -ForUser @forComputerArg -ErrorAction Ignore
         }
 }
 
@@ -147,7 +147,7 @@ Describe 'Set-CEnvVariable' {
     It 'sets process-level variable' {
         $name = 'Carbon+Set-CEnvVariable+ForProcess'
         $value = New-TestValue
-        Remove-CEnvVariable -Name $name -ForProcess -ForUser
+        Remove-CEnvVariable -Name $name -ForProcess -ForUser -ErrorAction Ignore
 
         Set-CEnvVariable -Name $name -Value $value -ForProcess
         try
@@ -178,7 +178,7 @@ Describe 'Set-CEnvVariable' {
     }
 
     It 'supports WhatIf' {
-        Remove-CEnvVariable -Name $script:varName -ForProcess -ForUser
+        Remove-CEnvVariable -Name $script:varName -ForProcess -ForUser -ErrorAction Ignore
         Set-CEnvVariable -Name $script:varName -Value 'Doesn''t matter.' -ForProcess -WhatIf
         Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'User'
         Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'Process'

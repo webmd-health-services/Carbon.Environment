@@ -6,8 +6,11 @@ function Remove-CEnvVariable
     Removes an environment variable.
 
     .DESCRIPTION
-    Uses the .NET [Environment class](http://msdn.microsoft.com/en-us/library/z8te35sa) to remove an environment
-    variable from the Process, User, or Computer scopes.
+    The `Remove-CEnvVariable` function deletes environment variables. Pass the name to the `Name` parameter and
+    the scope(s) to remove it from with the `ForProcess`, `ForUser`, and/or `ForComputer` switches. If an environment
+    variable does not exist at that scope, the function writes an error. Uses the
+    `[Environment]::SetEnvironmentVariable` method to remove variable. Writes an information message for each
+    environment variable removed.
 
     Changes to environment variables in the User and Machine scope are not picked up by running processes.  Any running
     processes that use this environment variable should be restarted.
@@ -15,12 +18,8 @@ function Remove-CEnvVariable
     Normally, you have to restart your PowerShell session/process to no longer see the variable in the `env:` drive. Use
     the `-Force` switch to also remove the variable from the `env:` drive.
 
-    Beginning with Carbon 2.3.0, you can set an environment variable for a specific user by specifying the `-ForUser`
-    switch and passing the user's credentials with the `-Credential` parameter. This runs a separate PowerShell process
-    as that user to remove the variable.
-
-    Beginning in Carbon 2.3.0, you can specify multiple scopes from which to remove an environment variable. In previous
-    versions, you could only remove from one scope.
+    On Windows, environment variable names are case-insensitive. On Linux and macOS, environment variable names are
+    case-sensitive.
 
     .LINK
     Set-CEnvVariable
@@ -41,7 +40,7 @@ function Remove-CEnvVariable
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        # The environment variable to remove.
+        # The environment variable to remove. Case-insensitive on Windows, case-sensitive on Linux and macOS.
         [Parameter(Mandatory)]
         [String] $Name,
 
@@ -97,17 +96,17 @@ function Remove-CEnvVariable
     }
 
     Invoke-Command -ScriptBlock {
-            if( $ForComputer )
+            if ($ForComputer)
             {
                 [EnvironmentVariableTarget]::Machine
             }
 
-            if( $ForUser )
+            if ($ForUser)
             {
                 [EnvironmentVariableTarget]::User
             }
 
-            if( $ForProcess )
+            if ($Force -or $ForProcess)
             {
                 [EnvironmentVariableTarget]::Process
             }
@@ -115,10 +114,23 @@ function Remove-CEnvVariable
         Where-Object { $PSCmdlet.ShouldProcess( "${_}-level environment variable ""${Name}""", "remove" ) } |
         ForEach-Object {
                 $scope = $_
-                [Environment]::SetEnvironmentVariable( $Name, [NullString]::Value, $scope )
-                if ($Force -and $scope -ne [EnvironmentVariableTarget]::Process)
+
+                if (-not (Test-CEnvVariable -Name $Name -Scope $scope))
                 {
-                    [Environment]::SetEnvironmentVariable($Name, [NullString]::Value, 'Process')
+                    # If forced, and we added the process scope, don't write an error
+                    if ($Force -and $scope -eq [EnvironmentVariableTarget]::Process -and -not $ForProcess)
+                    {
+                        continue
+                    }
+
+                    $msg = "Failed to delete ${Scope}-level environment variable ""${Name}"" because it does not " +
+                           'exist.'
+                    Write-Error -Message $msg -ErrorAction $ErrorActionPreference
+                    return
                 }
+
+                $msg = "Removing $($Scope.ToString().ToLowerInvariant())-level environment variable ""${Name}""."
+                Write-Information $msg
+                [Environment]::SetEnvironmentVariable( $Name, [NullString]::Value, $scope )
             }
 }
