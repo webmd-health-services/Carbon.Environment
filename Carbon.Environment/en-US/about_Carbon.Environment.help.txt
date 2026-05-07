@@ -1,0 +1,8 @@
+TOPIC
+    about_Carbon.Environment
+
+SHORT DESCRIPTION
+    Carbon.Environment is a PowerShell module for...
+
+LONG DESCRIPTION
+    The Carbon.Environment PowerShell module...

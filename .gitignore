@@ -1,0 +1,6 @@
+/.output
+/PSModules
+/.vscode
+/Carbon.Environment/*.md
+/Carbon.Environment/LICENSE.txt
+/Carbon.Environment/NOTICE.txt
