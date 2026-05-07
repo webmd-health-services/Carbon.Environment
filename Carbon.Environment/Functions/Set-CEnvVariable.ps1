@@ -6,8 +6,11 @@ function Set-CEnvVariable
     Creates or sets an environment variable.
 
     .DESCRIPTION
-    Uses the .NET [Environment class](http://msdn.microsoft.com/en-us/library/z8te35sa) to create or set an environment
-    variable in the Process, User, or Machine scopes.
+    The `Set-CEnvVariable` function creates or sets en environment variable value. It uses
+    `[Environment]::SetEnvironmentVariable`. Pass the name of the environment variable to the `Name` parameter, the
+    value to the `Value` parameter. To set the variable computer-wide, use the `ForComputer` switch. To set the variable
+    for the current user, use the `ForUser` switch. To set the variable for the current process, use the `ForProcess`
+    switch. Multiple scopes are accepted.
 
     Changes to environment variables in the User and Machine scope are not picked up by running processes.  Any running
     processes that use this environment variable should be restarted.
@@ -22,7 +25,7 @@ function Set-CEnvVariable
     Remove-CEnvVariable
 
     .LINK
-    http://msdn.microsoft.com/en-us/library/z8te35sa
+    Test-CEnvVariable
 
     .EXAMPLE
     Set-CEnvVariable -Name 'MyEnvironmentVariable' -Value 'Value1' -ForProcess
@@ -41,6 +44,11 @@ function Set-CEnvVariable
 
     Demonstrates that you can set a user-level environment variable for another user by passing its credentials to the
     `Credential` parameter. Runs a separate PowerShell process as that user to set the environment variable.
+
+    .EXAMPLE
+    Set-CEnvVariable -Name 'MySensitiveEnvironmentVariable' -Value 'SecretValue' -ForProcess -Sensitive
+
+    Demonstrates how to omit the environment variable value from the information message output by this function.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -72,7 +80,10 @@ function Set-CEnvVariable
 
         [Parameter(Mandatory,ParameterSetName='ForSpecificUser')]
         # Set an environment variable for a specific user.
-        [pscredential] $Credential
+        [pscredential] $Credential,
+
+        # Don't output the variable's value in information messages.
+        [switch] $Sensitive
     )
 
     Set-StrictMode -Version 'Latest'
@@ -117,7 +128,16 @@ function Set-CEnvVariable
                 [EnvironmentVariableTarget]::Process
             }
         } |
-        Where-Object { $PSCmdlet.ShouldProcess( "$_-level environment variable '$Name'", "set") } |
-        ForEach-Object { [Environment]::SetEnvironmentVariable( $Name, $Value, $_ ) }
-}
+        Where-Object { $PSCmdlet.ShouldProcess( "${_}-level environment variable ""${Name}""", "set") } |
+        ForEach-Object {
+            $valueMsg = " to ""${Value}"""
+            if ($Sensitive)
+            {
+                $valueMsg = ''
+            }
 
+            $msg = "Setting $($_.ToString().ToLowerInvariant())-level environment variable ""${Name}""${valueMsg}."
+            Write-Information $msg
+            [Environment]::SetEnvironmentVariable( $Name, $Value, $_ )
+        }
+}

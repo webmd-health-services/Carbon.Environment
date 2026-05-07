@@ -196,4 +196,11 @@ Describe 'Set-CEnvVariable' {
 
         $actualValue | Should -Be $expectedValue
     }
+
+    It 'hides value in information message' {
+        $testValue = New-TestValue
+        Set-CEnvVariable -Name $script:varName -Value $testValue -ForProcess -Sensitive -InformationVariable 'infoMsgs'
+        $infoMsgs | Should -Not -BeNullOrEmpty
+        $infoMsgs[0].MessageData | Should -Not -Match ([regex]::Escape($testValue))
+    }
 }
