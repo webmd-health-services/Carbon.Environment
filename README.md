@@ -1,6 +1,6 @@
 # Overview
 
-The "Carbon.Environment" module...
+The Carbon.Environment PowerShell module configures and manages the current environment.
 
 # System Requirements
 
@@ -24,3 +24,6 @@ Import-Module -Name '.\Carbon.Environment'
 ```
 
 # Commands
+
+* `Remove-CEnvVariable` for removing existing environment variables.
+* `Set-CEnvVariable` for creating or setting environment variables.

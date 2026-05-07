@@ -18,7 +18,7 @@
     RootModule = 'Carbon.Environment.psm1'
 
     # Version number of this module.
-    ModuleVersion = '0.0.0'
+    ModuleVersion = '1.0.0'
 
     # ID used to uniquely identify this module
     GUID = '158d71ce-406f-4dcd-ab30-728cf54bf3b4'
@@ -75,8 +75,7 @@
     # NestedModules = @()
 
     # Functions to export from this module. Only list public function here.
-    FunctionsToExport = @(
-    )
+    FunctionsToExport = @( 'Remove-CEnvVariable', 'Set-CEnvVariable' )
 
     # Cmdlets to export from this module. By default, you get a script module, so there are no cmdlets.
     # CmdletsToExport = @()

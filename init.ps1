@@ -16,7 +16,19 @@ Demonstrates how to call this script.
 param(
 )
 
+#Requires -RunAsAdministrator
 #Requires -Version 5.1
 Set-StrictMode -Version 'Latest'
 $ErrorActionPreference = 'Stop'
 $InformationPreference = 'Continue'
+
+Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'PSModules\Carbon' -Resolve) `
+              -Function @('Install-CUser') `
+              -Verbose:$false
+
+$password = ConvertTo-SecureString -String '1m33trequ!rments' -Force -AsPlainText
+$credentials = [pscredential]::New('CEnvironment', $password)
+
+Install-CUser -Credential $credentials -Description 'Carbon.Environment PowerShell module test user.'
+
+$credentials | Export-Clixml -Path '.cenvironment'

@@ -1,5 +1,5 @@
 
-function Remove-CEnvironmentVariable
+function Remove-CEnvVariable
 {
     <#
     .SYNOPSIS
@@ -13,7 +13,7 @@ function Remove-CEnvironmentVariable
     processes that use this environment variable should be restarted.
 
     Normally, you have to restart your PowerShell session/process to no longer see the variable in the `env:` drive. Use
-    the `-Force` switch to also remove the variable from the `env:` drive. This functionality was added in Carbon 2.3.0.
+    the `-Force` switch to also remove the variable from the `env:` drive.
 
     Beginning with Carbon 2.3.0, you can set an environment variable for a specific user by specifying the `-ForUser`
     switch and passing the user's credentials with the `-Credential` parameter. This runs a separate PowerShell process
@@ -23,53 +23,48 @@ function Remove-CEnvironmentVariable
     versions, you could only remove from one scope.
 
     .LINK
-    Carbon_EnvironmentVariable
-
-    .LINK
-    Set-CEnvironmentVariable
+    Set-CEnvVariable
 
     .LINK
     http://msdn.microsoft.com/en-us/library/z8te35sa
 
     .EXAMPLE
-    Remove-CEnvironmentVariable -Name 'MyEnvironmentVariable' -ForProcess
+    Remove-CEnvVariable -Name 'MyEnvironmentVariable' -ForProcess
 
     Removes the `MyEnvironmentVariable` from the process scope.
 
     .EXAMPLE
-    Remove-CEnvironmentVariable -Name 'SomeUsersVariable' -ForUser -Credential $credential
+    Remove-CEnvVariable -Name 'SomeUsersVariable' -ForUser -Credential $credential
 
     Demonstrates that you can remove another user's user-level environment variable by passing its credentials to the
     `Credential` parameter. This runs a separate PowerShell process as that user to remove the variable.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [Parameter(Mandatory)]
         # The environment variable to remove.
+        [Parameter(Mandatory)]
         [String] $Name,
 
-        [Parameter(ParameterSetName='ForCurrentUser')]
         # Removes the environment variable for the current computer.
+        [Parameter(ParameterSetName='ForCurrentUser')]
         [switch] $ForComputer,
 
+        # Removes the environment variable for the current user.
         [Parameter(ParameterSetName='ForCurrentUser')]
         [Parameter(Mandatory, ParameterSetName='ForSpecificUser')]
-        # Removes the environment variable for the current user.
         [switch] $ForUser,
 
-        [Parameter(ParameterSetName='ForCurrentUser')]
         # Removes the environment variable for the current process.
+        [Parameter(ParameterSetName='ForCurrentUser')]
         [switch] $ForProcess,
 
-        [Parameter(ParameterSetName='ForCurrentUser')]
         # Remove the variable from the current PowerShell session's `env:` drive, too. Normally, you have to restart
         # your session to no longer see the variable in the `env:` drive.
-        #
-        # This parameter was added in Carbon 2.3.0.
+        [Parameter(ParameterSetName='ForCurrentUser')]
         [switch] $Force,
 
-        [Parameter(Mandatory, ParameterSetName='ForSpecificUser')]
         # Remove an environment variable for a specific user.
+        [Parameter(Mandatory, ParameterSetName='ForSpecificUser')]
         [pscredential] $Credential
     )
 
@@ -81,12 +76,12 @@ function Remove-CEnvironmentVariable
         $parameters = $PSBoundParameters
         $parameters.Remove('Credential')
         $job = Start-Job -ScriptBlock {
-            Import-Module -Name (Join-Path -Path $using:carbonRoot -ChildPath 'Carbon.psd1')
+            Import-Module -Name (Join-Path -Path $using:moduleDirPath -ChildPath 'Carbon.Environment.psm1')
             $VerbosePreference = $using:VerbosePreference
             $ErrorActionPreference = $using:ErrorActionPreference
             $DebugPreference = $using:DebugPreference
             $WhatIfPreference = $using:WhatIfPreference
-            Remove-CEnvironmentVariable @using:parameters
+            Remove-CEnvVariable @using:parameters
         } -Credential $Credential
         $job | Wait-Job | Receive-Job
         $job | Remove-Job -Force -ErrorAction Ignore
@@ -127,4 +122,3 @@ function Remove-CEnvironmentVariable
                 }
             }
 }
-

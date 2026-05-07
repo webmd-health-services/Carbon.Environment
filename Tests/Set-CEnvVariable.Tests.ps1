@@ -2,13 +2,22 @@
 #Requires -Version 5.1
 Set-StrictMode -Version 'Latest'
 
+BeforeDiscovery {
+    Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath '..\PSModules\Carbon.Accounts' -Resolve) `
+                  -Function @('Test-CRunAsElevated') `
+                  -Prefix 'T' `
+                  -Verbose:$false
+
+}
+
 BeforeAll {
     Set-StrictMode -Version 'Latest'
 
-    & (Join-Path -Path $PSScriptRoot -ChildPath 'Initialize-CarbonTest.ps1' -Resolve)
+    Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath '..\Carbon.Environment' -Resolve) -Verbose:$false
 
     $script:varName = ''
     $script:testNum = 0
+    $script:credentials = Import-Clixml -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\.cenvironment' -Resolve)
 
     function Assert-TestEnvironmentVariableIs
     {
@@ -76,7 +85,7 @@ BeforeAll {
 
         $setArgs = @{ "For$Scope" = $true }
 
-        Set-CEnvironmentVariable -Name $script:varName -Value $value @setArgs
+        Set-CEnvVariable -Name $script:varName -Value $value @setArgs
         Assert-TestEnvironmentVariableIs -ExpectedValue $value -Scope $Scope
         return $value
     }
@@ -96,11 +105,16 @@ AfterAll {
         Where-Object { $_ -like 'CARBON_SETENVVAR_TEST_*' } |
         Select-Object -Unique |
         ForEach-Object {
-            Remove-CEnvironmentVariable -Name $_ -ForProcess -ForUser -ForComputer
+            $forComputerArg = @{}
+            if (Test-TCRunAsElevated)
+            {
+                $forComputerArg['ForComputer'] = $true
+            }
+            Remove-CEnvVariable -Name $_ -ForProcess -ForUser @forComputerArg
         }
 }
 
-Describe 'Set-CEnvironmentVariable' {
+Describe 'Set-CEnvVariable' {
     BeforeEach {
         while ($true)
         {
@@ -116,7 +130,7 @@ Describe 'Set-CEnvironmentVariable' {
         }
     }
 
-    It 'sets machine-level variable' {
+    It 'sets machine-level variable' -Skip:(-not (Test-TCRunAsElevated)) {
         $value = New-TestValue
         Set-TestEnvironmentVariable -Scope Computer -Value $value
         Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope User
@@ -131,42 +145,41 @@ Describe 'Set-CEnvironmentVariable' {
     }
 
     It 'sets process-level variable' {
-        $name = 'Carbon+Set-CEnvironmentVariable+ForProcess'
+        $name = 'Carbon+Set-CEnvVariable+ForProcess'
         $value = New-TestValue
-        Remove-CEnvironmentVariable -Name $name -ForProcess -ForUser -ForComputer
+        Remove-CEnvVariable -Name $name -ForProcess -ForUser
 
-        Set-CEnvironmentVariable -Name $name -Value $value -ForProcess
+        Set-CEnvVariable -Name $name -Value $value -ForProcess
         try
         {
-            Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'Computer' -ExpectedName $name
             Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'User' -ExpectedName $name
             Assert-TestEnvironmentVariableIs -ExpectedValue $value -Scope 'Process' -ExpectedName $name
             Assert-TestEnvironmentVariableSetInEnvDrive -ExpectedValue $value  -ExpectedName $name
         }
         finally
         {
-            Remove-CEnvironmentVariable -Name $name -ForProcess -ForUser -ForComputer
+            Remove-CEnvVariable -Name $name -ForProcess -ForUser
         }
     }
 
     Context '<_> scope' -ForEach 'Computer','User','Process' {
         $scope = $_
-        It 'overwrites existing variable' -ForEach $scope {
+        $skip = $scope -eq 'Computer' -and -not (Test-TCRunAsElevated)
+        It 'overwrites existing variable' -ForEach $scope -Skip:$skip {
             $scope = $_
             $value = New-TestValue
             $scopeParam = @{
                                 ('For{0}' -f $scope) = $true
                         }
-            Set-CEnvironmentVariable -Name $script:varName -Value $value -Force @scopeParam
+            Set-CEnvVariable -Name $script:varName -Value $value -Force @scopeParam
             Assert-TestEnvironmentVariableIs -ExpectedValue $value -Scope $scope -Force
             Assert-TestEnvironmentVariableSetInEnvDrive -ExpectedValue $value
         }
     }
 
     It 'supports WhatIf' {
-        Remove-CEnvironmentVariable -Name $script:varName -ForProcess -ForUser -ForComputer
-        Set-CEnvironmentVariable -Name $script:varName -Value 'Doesn''t matter.' -ForProcess -WhatIf
-        Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'Computer'
+        Remove-CEnvVariable -Name $script:varName -ForProcess -ForUser
+        Set-CEnvVariable -Name $script:varName -Value 'Doesn''t matter.' -ForProcess -WhatIf
         Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'User'
         Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'Process'
     }
@@ -174,10 +187,10 @@ Describe 'Set-CEnvironmentVariable' {
     It 'sets variable for another user' {
         $name = [Guid]::NewGuid().ToString()
         $expectedValue = New-TestValue
-        Set-CEnvironmentVariable -Name $name -Value $expectedValue -ForUser -Credential $CarbonTestUser
+        Set-CEnvVariable -Name $name -Value $expectedValue -ForUser -Credential $script:credentials
         $job = Start-Job -ScriptBlock {
             Get-Item -Path ('env:{0}' -f $using:name) | Select-Object -ExpandProperty 'Value'
-        } -Credential $CarbonTestUser
+        } -Credential $script:credentials
         $actualValue = $job | Wait-Job | Receive-Job
         $job | Remove-Job -Force -ErrorAction Ignore
 

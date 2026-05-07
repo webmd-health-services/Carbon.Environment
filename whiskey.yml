@@ -27,7 +27,7 @@ Build:
     TextSeparator: "$(NewLine)$(NewLine)"
 
 - PowerShell: .\init.ps1
-  .ExceptDuring: Clean
+  .OnlyBy: BuildServer
 
 - PowerShell: .\reset.ps1
   .OnlyDuring: Clean
