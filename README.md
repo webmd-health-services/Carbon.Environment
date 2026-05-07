@@ -27,3 +27,4 @@ Import-Module -Name '.\Carbon.Environment'
 
 * `Remove-CEnvVariable` for removing existing environment variables.
 * `Set-CEnvVariable` for creating or setting environment variables.
+* `Test-CEnvVariable` for testing if an environment variable exists.

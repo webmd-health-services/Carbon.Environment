@@ -14,3 +14,4 @@ If migrating from Carbon:
 
 * `Remove-CEnvVariable` for removing environment variables. Migrated from Carbon's `Remove-CEnvironmentVariable`.
 * `Set-CEnvVariable` for setting environment variables. Migrated from Carbon's `Set-CEnvironmentVariable`.
+* `Test-CEnvVariable` for testing if an environment variable exists.

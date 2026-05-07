@@ -75,7 +75,7 @@
     # NestedModules = @()
 
     # Functions to export from this module. Only list public function here.
-    FunctionsToExport = @( 'Remove-CEnvVariable', 'Set-CEnvVariable' )
+    FunctionsToExport = @( 'Remove-CEnvVariable', 'Set-CEnvVariable', 'Test-CEnvVariable' )
 
     # Cmdlets to export from this module. By default, you get a script module, so there are no cmdlets.
     # CmdletsToExport = @()
