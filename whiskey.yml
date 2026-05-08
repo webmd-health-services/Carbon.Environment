@@ -48,13 +48,13 @@ Build:
     - "*.pdb"
     - "*.orig"
 
-- Exec: appveyor PushArtifact '$(WHISKEY_OUTPUT_DIRECTORY)\Carbon.Environment-$(WHISKEY_SEMVER2).zip' '-DeploymentName' 'GitHub'
+- Exec: appveyor PushArtifact '$(WHISKEY_OUTPUT_DIRECTORY)/Carbon.Environment-$(WHISKEY_SEMVER2).zip' '-DeploymentName' 'GitHub'
   .OnlyBy: BuildServer
 
 - PublishPowerShellModule:
     Path: Carbon.Environment
 
-- Exec: appveyor PushArtifact '$(WHISKEY_OUTPUT_DIRECTORY)\Carbon.Environment.$(WHISKEY_SEMVER2_NO_BUILD_METADATA).nupkg' -DeploymentName 'PowerShellGallery'
+- Exec: appveyor PushArtifact '$(WHISKEY_OUTPUT_DIRECTORY)/Carbon.Environment.$(WHISKEY_SEMVER2_NO_BUILD_METADATA).nupkg' -DeploymentName 'PowerShellGallery'
   .OnlyBy: BuildServer
 
 - Pester:

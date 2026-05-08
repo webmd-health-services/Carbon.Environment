@@ -22,13 +22,21 @@ Set-StrictMode -Version 'Latest'
 $ErrorActionPreference = 'Stop'
 $InformationPreference = 'Continue'
 
-Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'PSModules\Carbon' -Resolve) `
-              -Function @('Install-CUser') `
-              -Verbose:$false
+if (-not (Test-Path -Path 'variable:IsWindows'))
+{
+    $script:IsWindows = $true
+    $script:IsLinux = $script:IsMacOS = $false
+}
 
 $password = ConvertTo-SecureString -String '1m33trequ!rments' -Force -AsPlainText
 $credentials = [pscredential]::New('CEnvironment', $password)
-
-Install-CUser -Credential $credentials -Description 'Carbon.Environment PowerShell module test user.'
-
 $credentials | Export-Clixml -Path '.cenvironment'
+
+if ($IsWindows)
+{
+    Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'PSModules\Carbon' -Resolve) `
+                  -Function @('Install-CUser') `
+                  -Verbose:$false
+
+    Install-CUser -Credential $credentials -Description 'Carbon.Environment PowerShell module test user.'
+}

@@ -10,9 +10,12 @@ function Test-CEnvVariable
     the `Name` parameter (or pipe in multiple names). If a variable with that name exists in the current process,
     returns `$true`. Otherwise, returns `$false`.
 
-    Use the `Scope` parameter to check if user-level or computer-level environment variables exist.
+    By default, checks in the current process's environment variables. PowerShell and .NET do not support user-level and
+    computer-level environment variables. On Windows, use the `Scope` parameter to check if user-level or computer-level
+    environment variables exist.
 
-    To check if a specific user has an environment variable, pass that user's credentials to the `Credential` parameter.
+    To check if a specific user has an environment variable on Windows, pass that user's credentials to the `Credential`
+    parameter.
 
     On Windows, environment variable names are case-insenstive. On Linux and macOS, they are case-sensitive.
 
@@ -64,10 +67,7 @@ function Test-CEnvVariable
 
         $userEnvVars = [Collections.Generic.List[String]]::New()
 
-        if (-not $PSBoundParameters.ContainsKey('Scope'))
-        {
-            $Scope = [EnvironmentVariableTarget]::Process
-        }
+        $validScope = $Scope | Assert-Scope
     }
 
     process
@@ -78,28 +78,41 @@ function Test-CEnvVariable
             return
         }
 
-        return ($null -ne [Environment]::GetEnvironmentVariable($Name, $Scope))
+        if ($null -eq $validScope)
+        {
+            return
+        }
+
+        return ($null -ne [Environment]::GetEnvironmentVariable($Name, $validScope))
     }
 
     end
     {
-        if ($Credential -and $userEnvVars.Count)
+        if (-not $Credential -or -not $userEnvVars.Count)
         {
-            $parameters = $PSBoundParameters
-            [void]$parameters.Remove('Credential')
-            [void]$parameters.Remove('Name')
-            Start-Job -ScriptBlock {
-                    Import-Module -Name (Join-Path -path $using:moduleDirPath -ChildPath 'Carbon.Environment.psm1' -Resolve)
-                    $VerbosePreference = $using:VerbosePreference
-                    $ErrorActionPreference = $using:ErrorActionPreference
-                    $DebugPreference = $using:DebugPreference
-                    $WhatIfPreference = $using:WhatIfPreference
-                    $InformationPreference = $using:InformationPreference
-                    $using:userEnvVars | Test-CEnvVariable @using:parameters -Scope User
-                } -Credential $Credential |
-                Receive-Job -Wait -AutoRemoveJob |
-                Write-Output
             return
         }
+
+        if (-not $IsWindows)
+        {
+            $msg = 'PowerShell and .NET only support user-level environment variables on Windows.'
+            Write-Error -Message $msg -ErrorAction $ErrorActionPreference
+            return
+        }
+
+        $parameters = $PSBoundParameters
+        [void]$parameters.Remove('Credential')
+        [void]$parameters.Remove('Name')
+        Start-Job -ScriptBlock {
+                Import-Module -Name (Join-Path -path $using:moduleDirPath -ChildPath 'Carbon.Environment.psm1' -Resolve)
+                $VerbosePreference = $using:VerbosePreference
+                $ErrorActionPreference = $using:ErrorActionPreference
+                $DebugPreference = $using:DebugPreference
+                $WhatIfPreference = $using:WhatIfPreference
+                $InformationPreference = $using:InformationPreference
+                $using:userEnvVars | Test-CEnvVariable @using:parameters -Scope User
+            } -Credential $Credential |
+            Receive-Job -Wait -AutoRemoveJob |
+            Write-Output
     }
 }

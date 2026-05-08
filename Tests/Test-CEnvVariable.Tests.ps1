@@ -2,6 +2,19 @@
 #Requires -Version 5.1
 Set-StrictMode -Version 'Latest'
 
+BeforeDiscovery {
+    Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath '..\PSModules\Carbon.Accounts' -Resolve) `
+                  -Function @('Test-CRunAsElevated') `
+                  -Prefix 'T' `
+                  -Verbose:$false
+
+    if (-not (Test-Path -Path 'variable:IsWindows'))
+    {
+        $script:IsWindows = $true
+        $script:IsLinux = $script:IsMacOS = $false
+    }
+}
+
 BeforeAll {
     Set-StrictMode -Version 'Latest'
 
@@ -40,13 +53,28 @@ BeforeAll {
 
     function ThenError
     {
+        [CmdletBinding()]
         param(
-            [switch] $IsEmpty
+            [switch] $IsEmpty,
+
+            [String] $MatchesRegex,
+
+            [int] $HasCount
         )
 
         if ($IsEmpty)
         {
             $Global:Error | Should -BeNullOrEmpty
+        }
+
+        if ($MatchesRegex)
+        {
+            $Global:Error | Should -Match $MatchesRegex
+        }
+
+        if ($PSBoundParameters.ContainsKey('HasCount'))
+        {
+            $Global:Error | Should -HaveCount $HasCount
         }
     }
 
@@ -63,14 +91,24 @@ BeforeAll {
 }
 
 AfterAll {
-    $scopes = @('Process','User')
+    $scopes = @('Process')
+    if ($IsWindows)
+    {
+        $scopes += @('User')
+        if (Test-TCRunAsElevated)
+        {
+            $scopes += 'Machine'
+        }
+    }
     & {
             [Environment]::GetEnvironmentVariables('Process').Keys
-            [Environment]::GetEnvironmentVariables('User').Keys
-            if (Test-TCRunAsElevated)
+            if ($IsWindows)
             {
-                [Environment]::GetEnvironmentVariables('Machine').Keys
-                $scopes += 'Machine'
+                [Environment]::GetEnvironmentVariables('User').Keys
+                if (Test-TCRunAsElevated)
+                {
+                    [Environment]::GetEnvironmentVariables('Machine').Keys
+                }
             }
         } |
         Where-Object { $_ -like "${script:varNamePrefix}*" } |
@@ -82,12 +120,57 @@ Describe 'Test-CEnvVariable' {
         $Global:Error.Clear()
     }
 
-    Context '<_>-level' -ForEach @('Process', 'User', 'Machine') {
-        It 'returns true' -ForEach $_ {
-            [Environment]::GetEnvironmentVariables($_).Keys |
-                Test-CEnvVariable -Scope $_ |
-                Should -BeTrue
+    Context 'Windows' -Skip:(-not $IsWindows) {
+        Context '<_>-level' -ForEach @('Process', 'User', 'Machine') {
+            It 'returns true' -ForEach $_ {
+                $scope = $_
+                [Environment]::GetEnvironmentVariables($scope).Keys |
+                    # If VSCODE_GIT_ASKPASS_EXTRA_ARGS env var's value is empty, it's value comes back as `$null` when
+                    # run under Pester.
+                    Where-Object { $_ -ne 'VSCODE_GIT_ASKPASS_EXTRA_ARGS' } |
+                    Test-CEnvVariable -Scope $scope |
+                    Should -BeTrue
+                ThenError -IsEmpty
+            }
+        }
+
+        It 'can check at specific scope' {
+            $name = '010'
+            GivenEnvVar $name -AtScope User
+            WhenTesting $name -WithArgs @{ Scope = 'Process' } | Should -BeFalse
+            WhenTesting $name -WithArgs @{ Scope = 'User' } | Should -BeTrue
+            WhenTesting $name -WithArgs @{ Scope = 'Machine' } | Should -BeFalse
             ThenError -IsEmpty
+        }
+
+        It 'tests for specific user' {
+            $name = '020'
+            GivenEnvVar $name -ForUser $script:credentials
+            WhenTesting $name -WithArgs @{ Credential = $script:credentials } | Should -BeTrue
+            WhenTesting $name | Should -BeFalse
+            WhenTesting $name -WithArgs @{ Scope = 'User' } | Should -BeFalse
+
+            $envVars = Get-ChildItem -Path 'env:'
+            $envVars | Test-CEnvVariable -Credential $script:credentials | Should -HaveCount $envVars.Count
+            ThenError -IsEmpty
+        }
+    }
+
+    Context 'Linux and macOS' -Skip:$IsWindows {
+        Context '<_>-level' -ForEach @('User', 'Machine') {
+            It 'returns nothing and writes an error' -ForEach $_ {
+                [Environment]::GetEnvironmentVariables($_).Keys |
+                    Test-CEnvVariable -Scope $_ -ErrorAction SilentlyContinue |
+                    Should -BeNullOrEmpty
+                ThenError -Matches 'only support .* on Windows' -HasCount 1
+            }
+        }
+
+        It 'does not support testing a specific user''s variables' {
+            $name = '040'
+            WhenTesting $name -WithArgs @{ Credential = $script:credentials ; ErrorAction = 'SilentlyContinue' } |
+                Should -HaveCount 0
+            ThenError -Matches 'only support .* on Windows' -HasCount 1
         }
     }
 
@@ -98,20 +181,10 @@ Describe 'Test-CEnvVariable' {
         }
     }
 
-    It 'can check at specific scope' {
-        $name = '003'
-        GivenEnvVar $name -AtScope User
-        WhenTesting $name -WithArgs @{ Scope = 'Process' } | Should -BeFalse
-        WhenTesting $name -WithArgs @{ Scope = 'User' } | Should -BeTrue
-        WhenTesting $name -WithArgs @{ Scope = 'Machine' } | Should -BeFalse
-        ThenError -IsEmpty
-    }
-
     It 'checks at process scope by default' {
-        $name = '004'
-        GivenEnvVar $name -AtScope User
-        WhenTesting $name | Should -BeFalse
-        WhenTesting $name -WithArgs @{ Scope = 'User' } | Should -BeTrue
+        $name = '060'
+        GivenEnvVar $name -AtScope Process
+        WhenTesting $name | Should -BeTrue
         ThenError -IsEmpty
     }
 
@@ -122,15 +195,4 @@ Describe 'Test-CEnvVariable' {
         ThenError -IsEmpty
     }
 
-    It 'tests for specific user' {
-        $name = '005'
-        GivenEnvVar $name -ForUser $script:credentials
-        WhenTesting $name -WithArgs @{ Credential = $script:credentials } | Should -BeTrue
-        WhenTesting $name | Should -BeFalse
-        WhenTesting $name -WithArgs @{ Scope = 'User' } | Should -BeFalse
-
-        $envVars = Get-ChildItem -Path 'env:'
-        $envVars | Test-CEnvVariable -Credential $script:credentials | Should -HaveCount $envVars.Count
-        ThenError -IsEmpty
-    }
 }

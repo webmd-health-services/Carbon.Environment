@@ -8,6 +8,11 @@ BeforeDiscovery {
                   -Prefix 'T' `
                   -Verbose:$false
 
+    if (-not (Test-Path -Path 'variable:IsWindows'))
+    {
+        $script:IsWindows = $true
+        $script:IsLinux = $script:IsMacOS = $false
+    }
 }
 
 BeforeAll {
@@ -122,14 +127,24 @@ BeforeAll {
 }
 
 AfterAll {
-    $scopes = @('Process','User')
+    $scopes = @('Process')
+    if ($IsWindows)
+    {
+        $scopes += @('User')
+        if (Test-TCRunAsElevated)
+        {
+            $scopes += 'Machine'
+        }
+    }
     & {
             [Environment]::GetEnvironmentVariables('Process').Keys
-            [Environment]::GetEnvironmentVariables('User').Keys
-            if (Test-TCRunAsElevated)
+            if ($IsWindows)
             {
-                [Environment]::GetEnvironmentVariables('Machine').Keys
-                $scopes += 'Machine'
+                [Environment]::GetEnvironmentVariables('User').Keys
+                if (Test-TCRunAsElevated)
+                {
+                    [Environment]::GetEnvironmentVariables('Machine').Keys
+                }
             }
         } |
         Where-Object { $_ -like "${script:varNamePrefix}*" } |
@@ -141,85 +156,121 @@ Describe 'Uninstall-CEnvVariable' {
         $Global:Error.Clear()
     }
 
-    Context "<_>-level variable" -ForEach @('Process', 'User', 'Machine') {
-        $scope = $_
-        $skip = $scope -eq 'Machine' -and -not (Test-TCRunAsElevated)
+    Context 'Windows' -Skip:(-not $IsWindows) {
+        Context "<_>-level" -ForEach @('Process', 'User', 'Machine') {
 
-        It 'removes variable' -Skip:$skip -ForEach $_ {
-            $name = "${_}_001"
-            GivenEnvVar $name -AtScope $_
-            WhenUninstalling $name -WithArgs @{ Scope = $_ }
-            ThenEnvVar $name -Not -Exists
+            $skip = $_ -eq 'Machine' -and -not (Test-TCRunAsElevated)
+
+            It 'removes variable' -Skip:$skip -ForEach $_ {
+                $name = "${_}_000"
+                GivenEnvVar $name -AtScope $_
+                WhenUninstalling $name -WithArgs @{ Scope = $_ }
+                ThenEnvVar $name -Not -Exists
+            }
+
+            It 'only removes variable at that scope' -Skip:$skip -ForEach $_ {
+                $scope = $_
+                $name = "${scope}_010"
+                GivenEnvVar $name -AtScope Process
+                GivenEnvVar $name -AtScope User
+                if (Test-TCRunAsElevated)
+                {
+                    GivenEnvVar $name -AtScope Machine
+                }
+                WhenUninstalling $name -WithArgs @{ Scope = $scope }
+                ThenEnvVar $name -Not:($scope -eq 'Process') -Exists -AtScope Process
+                ThenEnvVar $name -Not:($scope -eq 'User') -Exists -AtScope User
+                ThenEnvVar $name -Not:($scope -eq 'Machine' -or -not (Test-TCRunAsElevated)) -Exists -AtScope Machine
+            }
         }
 
-        It 'only removes variable at that scope' -Skip:$skip -ForEach $_ {
-            $scope = $_
-            $name = "${_}_002"
-            GivenEnvVar $name -AtScope Process
-            GivenEnvVar $name -AtScope User
+        It 'removes from multiple scopes' {
+            $scopes = @('Process', 'User')
             if (Test-TCRunAsElevated)
             {
-                GivenEnvVar $name -AtScope Machine
+                $scopes += 'Machine'
             }
-            WhenUninstalling $name -WithArgs @{ Scope = $scope }
-            ThenEnvVar $name -Not:($scope -eq 'Process') -Exists -AtScope Process
-            ThenEnvVar $name -Not:($scope -eq 'User') -Exists -AtScope User
-            ThenEnvVar $name -Not:($scope -eq 'Machine' -or -not (Test-TCRunAsElevated)) -Exists -AtScope Machine
+            $name = '020'
+            foreach ($scope in $scopes)
+            {
+                GivenEnvVar $name -AtScope $scope
+            }
+            WhenUninstalling $name -WithArgs @{ Scope = $scopes }
+            ThenEnvVar $name -Not -Exists
+            ThenError -IsEmpty
+        }
+
+        It 'removes variable for another user' {
+            $name = '030'
+            GivenEnvVar $name -AtScope User
+            GivenEnvVar $name -ForUser $script:credentials
+            WhenUninstalling $name -WithArgs @{ Credential = $script:credentials }
+            ThenEnvVar $name -Not -Exists -ForUser $script:credentials
+            ThenEnvVar $name -Exists -AtScope User
+            ThenError -IsEmpty
+        }
+
+        It 'removes only at specified scope' {
+            $name = '040'
+            GivenEnvVar $name -AtScope User
+            WhenUninstalling $name -WithArgs @{}
+            ThenEnvVar $name -Exists -AtScope User
+            ThenEnvVar $name -Not -Exists -AtScope Process
+        }
+    }
+
+    Context 'Linux and macOS' -Skip:$IsWindows {
+        Context "<_>-level" -ForEach @('User', 'Machine') {
+            It 'writes an error' -ForEach $_ {
+                WhenUninstalling '050' -WithArgs @{ Scope = $_ ; ErrorAction = 'SilentlyContinue' }
+                ThenError -Matches 'only support .* on Windows' -HasCount 1
+            }
+        }
+
+        Context 'Process-level' {
+            It 'removes variable' {
+                $name = '060'
+                GivenEnvVar $name -AtScope Process
+                WhenUninstalling $name -WithArgs @{ Scope = 'Process' }
+                ThenEnvVar $name -Not -Exists -AtScope Process
+                ThenError -IsEmpty
+            }
+        }
+
+        It 'still removes process-level variable when given unsupported scopes' {
+            $scopes = @('Process', 'User', 'Machine')
+            $name = '070'
+            GivenEnvVar $name -AtScope Process
+            WhenUninstalling $name -WithArgs @{ Scope = $scopes ; ErrorAction = 'SilentlyContinue' }
+            ThenEnvVar $name -Not -Exists -AtScope Process
+            ThenError -Matches 'only support .* on Windows' -HasCount 1
+        }
+
+        It 'does not support removing specfic user''s variables' {
+            $name = '080'
+            WhenUninstalling $name -WithArgs @{ Credential = $script:credentials ; ErrorAction = 'SilentlyContinue' }
+            ThenError -Matches 'only support .* on Windows' -HasCount 1
         }
     }
 
     It 'ignores non-existent variable' {
-        $name = '002'
+        $name = '090'
         WhenUninstalling $name -WithArgs @{ Scope = 'Process' }
         ThenEnvVar $name -Not -Exists
         ThenError -IsEmpty
     }
 
     It 'supports WhatIf' {
-        $name = '003'
+        $name = '100'
         GivenEnvVar $name -AtScope Process
         WhenUninstalling $name -WithArgs @{ WhatIf = $true }
         ThenEnvVar $name -Exists -AtScope Process
         ThenError -IsEmpty
     }
 
-    It 'removes from multiple scopes' {
-        $scopes = @('Process', 'User')
-        if (Test-TCRunAsElevated)
-        {
-            $scopes += 'Machine'
-        }
-        $name = '004'
-        foreach ($scope in $scopes)
-        {
-            GivenEnvVar $name -AtScope $scope
-        }
-        WhenUninstalling $name -WithArgs @{ Scope = $scopes }
-        ThenEnvVar $name -Not -Exists
-        ThenError -IsEmpty
-    }
-
-    It 'removes variable for another user' {
-        $name = '005'
-        GivenEnvVar $name -AtScope User
-        GivenEnvVar $name -ForUser $script:credentials
-        WhenUninstalling $name -WithArgs @{ Credential = $script:credentials }
-        ThenEnvVar $name -Not -Exists -ForUser $script:credentials
-        ThenEnvVar $name -Exists -AtScope User
-        ThenError -IsEmpty
-    }
-
-    It 'removes only at specified scope' {
-        $name = '006'
-        GivenEnvVar $name -AtScope User
-        WhenUninstalling $name -WithArgs @{}
-        ThenEnvVar $name -Exists -AtScope User
-        ThenEnvVar $name -Not -Exists -AtScope Process
-    }
-
     It 'accepts pipeline input' {
-        $name = "${script:varNamePrefix}007"
-        $name2 = "${script:varNamePrefix}008"
+        $name = "${script:varNamePrefix}110"
+        $name2 = "${script:varNamePrefix}111"
         GivenEnvVar $name
         GivenEnvVar $name2
         $name,$name2 | Uninstall-CEnvVariable
@@ -229,7 +280,7 @@ Describe 'Uninstall-CEnvVariable' {
     }
 
     It 'removess from process scope by default' {
-        $name = '009'
+        $name = '120'
         GivenEnvVar $name -AtScope Process
         ThenEnvVar $name -Exists -AtScope Process
         WhenUninstalling $name
@@ -237,8 +288,8 @@ Describe 'Uninstall-CEnvVariable' {
     }
 
     It 'accepts array of names' {
-        $name = '009'
-        $name2 = '010'
+        $name = '130'
+        $name2 = '131'
         GivenEnvVar $name
         GivenEnvVar $name2
         WhenUninstalling $name,$name2

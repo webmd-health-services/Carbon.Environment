@@ -8,6 +8,11 @@ BeforeDiscovery {
                   -Prefix 'T' `
                   -Verbose:$false
 
+    if (-not (Test-Path -Path 'variable:IsWindows'))
+    {
+        $script:IsWindows = $true
+        $script:IsLinux = $script:IsMacOS = $false
+    }
 }
 
 BeforeAll {
@@ -41,8 +46,7 @@ BeforeAll {
         {
             $setArgs['Credential'] = $ForUser
         }
-
-        if ($null -ne $AtScope)
+        elseif ($PSBoundParameters.ContainsKey('AtScope'))
         {
             $setArgs['Scope'] = $AtScope
         }
@@ -84,12 +88,15 @@ BeforeAll {
 
     function ThenError
     {
+        [CmdletBinding()]
         param(
             [switch] $Not,
 
             [switch] $IsEmpty,
 
-            [String] $MatchesRegex
+            [String] $MatchesRegex,
+
+            [int] $HasCount
         )
 
         if ($IsEmpty)
@@ -100,6 +107,11 @@ BeforeAll {
         if ($MatchesRegex)
         {
             $Global:Error | Should -Not:$Not -Match $MatchesRegex
+        }
+
+        if ($PSBoundParameters.ContainsKey('HasCount'))
+        {
+            $Global:Error | Should -HaveCount $HasCount
         }
     }
 
@@ -125,14 +137,25 @@ BeforeAll {
 }
 
 AfterAll {
-    $scopes = @('Process','User')
+    $scopes = @('Process')
+    if ($IsWindows)
+    {
+        $scopes += @('User')
+        if (Test-TCRunAsElevated)
+        {
+            $scopes += 'Machine'
+        }
+    }
+
     & {
             [Environment]::GetEnvironmentVariables('Process').Keys
-            [Environment]::GetEnvironmentVariables('User').Keys
-            if (Test-TCRunAsElevated)
+            if ($IsWindows)
             {
-                [Environment]::GetEnvironmentVariables('Machine').Keys
-                $scopes += 'Machine'
+                [Environment]::GetEnvironmentVariables('User').Keys
+                if (Test-TCRunAsElevated)
+                {
+                    [Environment]::GetEnvironmentVariables('Machine').Keys
+                }
             }
         } |
         Where-Object { $_ -like "${script:varNamePrefix}*" } |
@@ -144,75 +167,118 @@ Describe 'Remove-CEnvVariable' {
         $Global:Error.Clear()
     }
 
-    Context '<_>-level' -ForEach 'Machine','User','Process' {
-        $scope = $_
-        $skip = $scope -eq 'Machine' -and -not (Test-TCRunAsElevated)
-        It 'removes variable' -ForEach $scope -Skip:$skip {
-            $name = "${_}_001"
-            GivenEnvVar $name -AtScope $_
-            WhenRemoving $name -WithArgs @{ Scope = $_ }
-            ThenEnvVar $name -AtScope $_ -Not -Exists
-            ThenError -IsEmpty
+    Context 'Windows' -Skip:(-not $IsWindows) {
+        Context '<_>-level' -ForEach 'Machine','User','Process' {
+            $skip = $_ -eq 'Machine' -and -not (Test-TCRunAsElevated)
+            It 'removes variable' -ForEach $_ -Skip:$skip {
+                $name = "${_}_000"
+                GivenEnvVar $name -AtScope $_
+                WhenRemoving $name -WithArgs @{ Scope = $_ }
+                ThenEnvVar $name -AtScope $_ -Not -Exists
+                if ($IsWindows)
+                {
+                    ThenError -IsEmpty
+                }
+                else
+                {
+                    ThenError -Matches 'not supported'
+                }
+            }
+        }
+
+        It 'removes from multiple scopes' {
+            $name = '010'
+            GivenEnvVar $name -AtScope Process
+            GivenEnvVar $name -AtScope User
+            if (Test-TCRunAsElevated)
+            {
+                GivenEnvVar $name -AtScope Machine
+            }
+            $scopes = @('Process', 'User')
+            if (Test-TCRunAsElevated)
+            {
+                $scopes += 'Machine'
+            }
+
+            WhenRemoving $name -WithArgs @{ Scope = $scopes }
+            ThenEnvVar $name -AtScope Process -Not -Exists
+            ThenEnvVar $name -AtScope User -Not -Exists
+            ThenEnvVar $name -AtScope Machine -Not -Exists
+        }
+
+        It 'removes variable for another user' {
+            $name = '020'
+            GivenEnvVar $name -ForUser $script:credentials
+            GivenEnvVar $name -AtScope Process
+            WhenRemoving $name -WithArgs @{ Credential = $script:credentials }
+            ThenEnvVar $name -ForUser $script:credentials -Not -Exists
+            ThenEnvVar $name -AtScope Process -Exists
         }
     }
 
-    It 'fails if variable does not exist' {
-        WhenRemoving '002' -WithArgs @{ ErrorAction = 'SilentlyContinue' }
-        ThenError -Not -IsEmpty
-        ThenError -MatchesRegex 'does not exist'
+    Context 'Linux and macOS' -Skip:$IsWindows {
+        Context '<_>-level' -ForEach @('User', 'Machine') {
+            It 'fails' -ForEach $_ {
+                WhenRemoving 'does not matter' -WithArgs @{ Scope = $_ ; ErrorAction = 'SilentlyContinue' }
+                ThenError -Matches 'only support .* on Windows' -HasCount 1
+            }
+        }
+        Context 'Process-level' {
+            It 'removes variable' {
+                $name = '030'
+                GivenEnvVar $name -AtScope Process
+                ThenEnvVar $name -AtScope Process -Exists
+                WhenRemoving $name -WithArgs @{ Scope = 'Process' }
+                ThenEnvVar $name -AtScope Process -Not -Exists
+                ThenError -IsEmpty
+            }
+        }
+
+        It 'only removes at process scope' {
+            $name = '040'
+            GivenEnvVar $name -AtScope Process
+            WhenRemoving $name -WithArgs @{ Scope = 'Process','User','Machine' ; ErrorAction = 'SilentlyContinue' }
+            ThenEnvVar $name -AtScope Process -Not -Exists
+            ThenError -Matches 'only support .* on Windows' -HasCount 1
+        }
+
+        It 'does not support other user environment variables' {
+            $name = '050'
+            WhenRemoving $name -WithArgs @{ Credential = $script:credentials ; ErrorAction = 'SilentlyContinue' }
+            ThenError -Matches 'only support .* on Windows' -HasCount 1
+        }
+    }
+
+    Context 'variable does not exist' {
+        It 'writes an error' {
+            WhenRemoving '060' -WithArgs @{ ErrorAction = 'SilentlyContinue' }
+            ThenError -Not -IsEmpty
+            ThenError -MatchesRegex 'does not exist' -HasCount 1
+        }
     }
 
     It 'ignores failures' {
-        WhenRemoving '003' -withArgs @{ ErrorAction = 'Ignore' }
+        WhenRemoving '070' -withArgs @{ ErrorAction = 'Ignore' }
         ThenError -IsEmpty
     }
 
     It 'supports WhatIf' {
-        $name = '004'
+        $name = '080'
         GivenEnvVar $name
         WhenRemoving $name -WithArgs @{ WhatIf = $true }
         ThenEnvVar $name -Exists -AtScope Process
     }
 
-    It 'removes from multiple scopes' {
-        $name = '005'
-        GivenEnvVar $name -AtScope Process
-        GivenEnvVar $name -AtScope User
-        if (Test-TCRunAsElevated)
-        {
-            GivenEnvVar $name -AtScope Machine
-        }
-        $scopes = @('Process', 'User')
-        if (Test-TCRunAsElevated)
-        {
-            $scopes += 'Machine'
-        }
-
-        WhenRemoving $name -WithArgs @{ Scope = $scopes }
-        ThenEnvVar $name -AtScope Process -Not -Exists
-        ThenEnvVar $name -AtScope User -Not -Exists
-        ThenEnvVar $name -AtScope Machine -Not -Exists
-    }
-
     It 'removes at process scope by default' {
-        $name = '006'
+        $name = '090'
         GivenEnvVar $name -AtScope Process
         WhenRemoving $name
         ThenEnvVar $name -AtScope Process -Not -Exists
     }
 
-    It 'removes variable for another user' {
-        $name = '007'
-        GivenEnvVar $name -ForUser $script:credentials
-        GivenEnvVar $name -AtScope Process
-        WhenRemoving $name -WithArgs @{ Credential = $script:credentials }
-        ThenEnvVar $name -ForUser $script:credentials -Not -Exists
-        ThenEnvVar $name -AtScope Process -Exists
-    }
-
     It 'accepts pipeline input' {
-        $name = "${script:varNamePrefix}008"
-        $name2 = "${script:varNamePrefix}009"
+        $name = "${script:varNamePrefix}100"
+        $name2 = "${script:varNamePrefix}101"
         GivenEnvVar $name
         GivenEnvVar $name2
         $name, $name2 | Remove-CEnvVariable
@@ -221,8 +287,8 @@ Describe 'Remove-CEnvVariable' {
     }
 
     It 'accepts multiple names' {
-        $name = '010'
-        $name2 = '011'
+        $name = '120'
+        $name2 = '121'
         GivenEnvVar $name
         GivenEnvVar $name2
         WhenRemoving $name,$name2

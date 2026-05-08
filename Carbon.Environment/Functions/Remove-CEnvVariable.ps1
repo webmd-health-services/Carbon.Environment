@@ -10,14 +10,15 @@ function Remove-CEnvVariable
     variables to delete to the `Name` parameter (or pipe the names into the function). If an environment variable does
     not exist at that scope, the function writes an error. Otherwise, the environment variable is deleted.
 
-    By default, operates on the current process's environment variables. Use the `Scope` parameter to remove user-level
-    and/or machine-level environment variables. Multiple scopes are accepted. Changes to environment variables are not
+    By default, operates on the current process's environment variables. PowerShell and .NET do not support user-level
+    and computer-level environment variables. On Windows, use the `Scope` parameter to remove user-level and/or
+    machine-level environment variables. Multiple scopes are accepted. Changes to environment variables are not
     reflected in running processes, including the current PowerShell session. If you want the removal of the user-level
     or machine-level environment variable to be reflected in the current process, include `Process` in the list of
     scopes passed to the `Scope` parameter.
 
-    To remove a user-level environment variable for a specific user, pass that user's credentials to the `-Credential`
-    parameter. A PowerShell process is run as that user to remove the environment variable.
+    To remove a user-level environment variable for a specific user on Windows, pass that user's credentials to the
+    `-Credential` parameter. A PowerShell process is run as that user to remove the environment variable.
 
     On Windows, environment variable names are case-insensitive. On Linux and macOS, environment variable names are
     case-sensitive.
@@ -91,13 +92,7 @@ function Remove-CEnvVariable
 
         $userEnvVars = [Collections.Generic.List[string]]::new()
 
-        if (-not $PSBoundParameters.ContainsKey('Scope'))
-        {
-            $Scope = [EnvironmentVariableTarget]::Process
-        }
-
-        # Delete at each scope once and delete from higher scopes first.
-        $Scope = $Scope | Select-Object -Unique | Sort-Object -Descending
+        $Scope = $Scope | Assert-Scope
     }
 
     process
@@ -136,6 +131,13 @@ function Remove-CEnvVariable
     {
         if (-not $Credential -or -not $userEnvVars.Count)
         {
+            return
+        }
+
+        if (-not $IsWindows)
+        {
+            $msg = 'PowerShell and .NET only support user-level environment variables on Windows.'
+            Write-Error -Message $msg -ErrorAction $ErrorActionPreference
             return
         }
 

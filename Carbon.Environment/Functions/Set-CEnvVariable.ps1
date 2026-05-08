@@ -12,11 +12,15 @@ function Set-CEnvVariable
     Uses `[Environment]::SetEnvironmentVariable` to create the variable if it doesn't exist, or update its value if the
     variable exists and its value is different from the value being set.
 
-    By default, creates and sets the current process's environment variables. Use the `Scope` parameter to remove
+    By default, creates and sets the current process's environment variables. PowerShell and .NET on Linux and macOS do
+    not support user-level and computer-level environment variables. On Windows, use the `Scope` parameter to remove
     user-level and/or machine-level environment variables. Multiple scopes are accepted. Changes to environment
     variables are not reflected in running processes, including the current PowerShell session. If you want a new or
     changed user-level or machine-level environment variable to be reflected in the current process, include `Process`
     in the list of scopes passed to the `Scope` parameter.
+
+    To create or set an environment variable for a specific user on Windows, pass that user's credentials to the
+    `-Credential` parameter. This will run a PowerShell process that creates or sets the environment variable.
 
     Writes an information message for each environment variable created or updated. The message includes the value being
     set. Use the `Sensitive` switch to omit the value from the information message.
@@ -26,9 +30,6 @@ function Set-CEnvVariable
 
     In PowerShell 7.4 and earlier, setting `Value` to an empty string deletes the variable. In newer versions of
     PowerShell, the variable is set to an empty value.
-
-    To create or set an environment variable for a specific user, pass that user's credentials to the `-Credential`
-    parameter. This will run a PowerShell process that creates or sets the environment variable.
 
     .LINK
     Remove-CEnvVariable
@@ -107,6 +108,13 @@ function Set-CEnvVariable
 
     if( $PSCmdlet.ParameterSetName -eq 'ForSpecificUser' )
     {
+        if (-not $IsWindows)
+        {
+            $msg = 'PowerShell and .NET only support user-level environment variables on Windows.'
+            Write-Error -Message $msg -ErrorAction $ErrorActionPreference
+            return
+        }
+
         $parameters = $PSBoundParameters
         [void]$parameters.Remove('Credential')
         $job = Start-Job -ScriptBlock {
@@ -123,13 +131,7 @@ function Set-CEnvVariable
         return
     }
 
-    if (-not $PSBoundParameters.ContainsKey('Scope'))
-    {
-        $Scope = [EnvironmentVariableTarget]::Process
-    }
-
-    # Set at lower scopes first.
-    $Scope = $Scope | Select-Object -Unique | Sort-Object
+    $Scope = $Scope | Assert-Scope
 
     foreach ($_scope in $Scope)
     {

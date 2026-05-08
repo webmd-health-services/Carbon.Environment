@@ -8,6 +8,11 @@ BeforeDiscovery {
                   -Prefix 'T' `
                   -Verbose:$false
 
+    if (-not (Test-Path -Path 'variable:IsWindows'))
+    {
+        $script:IsWindows = $true
+        $script:IsLinux = $script:IsMacOS = $false
+    }
 }
 
 BeforeAll {
@@ -86,12 +91,15 @@ BeforeAll {
 
     function ThenError
     {
+        [CmdletBinding()]
         param(
             [switch] $Not,
 
             [switch] $IsEmpty,
 
-            [String] $MatchesRegex
+            [String] $MatchesRegex,
+
+            [int] $HasCount
         )
 
         if ($IsEmpty)
@@ -102,6 +110,11 @@ BeforeAll {
         if ($MatchesRegex)
         {
             $Global:Error | Should -Not:$Not -Match $MatchesRegex
+        }
+
+        if ($PSBoundParameters.ContainsKey('HasCount'))
+        {
+            $Global:Error | Should -HaveCount $HasCount
         }
     }
 
@@ -120,14 +133,24 @@ BeforeAll {
 }
 
 AfterAll {
-    $scopes = @('Process','User')
+    $scopes = @('Process')
+    if ($IsWindows)
+    {
+        $scopes += @('User')
+        if (Test-TCRunAsElevated)
+        {
+            $scopes += 'Machine'
+        }
+    }
     & {
             [Environment]::GetEnvironmentVariables('Process').Keys
-            [Environment]::GetEnvironmentVariables('User').Keys
-            if (Test-TCRunAsElevated)
+            if ($IsWindows)
             {
-                [Environment]::GetEnvironmentVariables('Machine').Keys
-                $scopes += 'Machine'
+                [Environment]::GetEnvironmentVariables('User').Keys
+                if (Test-TCRunAsElevated)
+                {
+                    [Environment]::GetEnvironmentVariables('Machine').Keys
+                }
             }
         } |
         Where-Object { $_ -like "${script:varNamePrefix}*" } |
@@ -139,41 +162,99 @@ Describe 'Set-CEnvVariable' {
         $Global:Error.Clear()
     }
 
-    Context '<_>-level' -ForEach 'Machine','User','Process' {
-        $scope = $_
-        $skip = $scope -eq 'Machine' -and -not (Test-TCRunAsElevated)
-        It 'creates variable' -ForEach $scope -Skip:$skip {
-            $name = "${_}_001"
-            WhenSetting $name -WithArgs @{ Value = $name ; Scope = $_ }
-            ThenEnvVar $name -Exists -AtScope $_ -WithValue $name
-            ThenError -IsEmpty
+    Context 'Windows' -Skip:(-not $IsWindows) {
+        Context '<_>-level' -ForEach 'Machine','User','Process' {
+            $skip = $_ -eq 'Machine' -and -not (Test-TCRunAsElevated)
+            It 'creates variable' -ForEach $_ -Skip:$skip {
+                $name = "${_}_000"
+                WhenSetting $name -WithArgs @{ Value = $name ; Scope = $_ }
+                ThenEnvVar $name -Exists -AtScope $_ -WithValue $name
+                ThenError -IsEmpty
+            }
+
+            It 'overwrites value' -ForEach $_ -Skip:$skip {
+                $name = "${_}_010"
+                GivenEnvVar $name -WithValue 'old value' -AtScope $_
+                WhenSetting $name -WithArgs @{ Value = $name ; Scope = $_ }
+                ThenEnvVar $name -Exists -AtScope $_ -WithValue $name
+                ThenError -IsEmpty
+            }
         }
 
-        It 'overwrites existing variable' -ForEach $scope -Skip:$skip {
-            $name = "${_}_002"
-            GivenEnvVar $name -WithValue 'old value' -AtScope $_
-            WhenSetting $name -WithArgs @{ Value = $name ; Scope = $_ }
-            ThenEnvVar $name -Exists -AtScope $_ -WithValue $name
-            ThenError -IsEmpty
+        It 'sets variable for another user' {
+            $name = '020'
+            WhenSetting $name -WithArgs @{ Value = $name ; Credential = $script:credentials }
+            ThenEnvVar $name -Not -Exists -AtScope 'Process','User','Machine'
+            ThenEnvVar $name -Exists -ForUser $script:credentials -WithValue $name
+        }
+
+        It 'sets multiple scopes' {
+            $name = '030'
+            WhenSetting $name -WithArgs @{ Value = $name ; Scope = @('Process', 'User') }
+            ThenEnvVar $name -Exists -AtScope Process -WithValue $name
+            ThenEnvVar $name -Exists -AtScope User -WithValue $name
+        }
+
+        It 'sets at distinct scopes' {
+            $name = '040'
+            WhenSetting $name -WithArgs @{ Value = "PROCESS_${name}" ; Scope = 'Process' }
+            WhenSetting $name -WithArgs @{ Value = "USER_${name}" ; Scope = 'User' }
+            ThenEnvVar $name -Exists -AtScope Process -WithValue "PROCESS_${name}"
+            ThenEnvVar $name -Exists -AtScope User -WithValue "USER_${name}"
+        }
+
+    }
+
+    Context 'Linux and macOS' -Skip:$IsWindows {
+        Context '<_>-level' -ForEach @('User', 'Machine') {
+            It 'fails' -ForEach $_ {
+                WhenSetting 'does not matter' `
+                            -WithArgs @{ Value = 'does not matter' ; Scope = $_ ; ErrorAction = 'SilentlyContinue' }
+                ThenError -Matches 'only support .* on Windows' -HasCount 1
+            }
+        }
+        Context 'Process-level' {
+            It 'creates variable' {
+                $name = '050'
+                ThenEnvVar $name -Not -Exists -AtScope Process
+                WhenSetting $name -WithArgs @{ Value = $name ; Scope = 'Process' }
+                ThenEnvVar $name -AtScope Process -Exists -WithValue $name
+                ThenError -IsEmpty
+            }
+            It 'overwrites value' {
+                $name = '060'
+                GivenEnvVar $name -WithValue 'old value' -AtScope Process
+                WhenSetting $name -WithArgs @{ Value = $name ; Scope = 'Process' }
+                ThenEnvVar $name -Exists -AtScope Process -WithValue $name
+                ThenError -IsEmpty
+            }
+        }
+
+        It 'does not set variable for another user' {
+            $setArgs =
+                @{ Value = 'does not matter' ; Credential = $script:credentials ; ErrorAction = 'SilentlyContinue' }
+            WhenSetting 'does not matter' -WithArgs $setArgs
+            ThenError -Matches 'only support .* on Windows' -HasCount 1
+        }
+
+        It 'only sets at process scope' {
+            $name = '070'
+            $setArgs = @{ Value = $name ; Scope = 'Process', 'User', 'Machine' ; ErrorAction = 'SilentlyContinue' }
+            WhenSetting $name -WithArgs $setArgs
+            ThenEnvVar $name -Exists -AtScope Process -WithValue $name
+            ThenError -Matches 'only support .* on Windows' -HasCount 1
         }
     }
 
     It 'supports WhatIf' {
-        $name = '003'
+        $name = '080'
         WhenSetting $name -WithArgs @{ Value = 'neverset' ; WhatIf = $true }
         ThenEnvVar $name -Not -Exists -AtScope 'Process','User','Machine'
         ThenError -IsEmpty
     }
 
-    It 'sets variable for another user' {
-        $name = '004'
-        WhenSetting $name -WithArgs @{ Value = $name ; Credential = $script:credentials }
-        ThenEnvVar $name -Not -Exists -AtScope 'Process','User','Machine'
-        ThenEnvVar $name -Exists -ForUser $script:credentials -WithValue $name
-    }
-
     It 'hides value in information message' {
-        $name = '005'
+        $name = '090'
         $value = '~!@#$%^&*()_+'
         WhenSetting $name -WithArgs @{ Value = $value ; Sensitive = $true } -InformationVariable 'infoMsgs'
         ThenEnvVar $name -Exists -AtScope Process -WithValue $value
@@ -182,7 +263,7 @@ Describe 'Set-CEnvVariable' {
     }
 
     It 'allows empty string values' {
-        $name = '006'
+        $name = '100'
         WhenSetting $name -WithArgs @{ Value = '' }
         # In .NET framework and .NET before 9, you couldn't set an enviironment variable to an empty string.
         if ([Environment]::Version -lt [Version]::New(9, 0))
@@ -196,7 +277,7 @@ Describe 'Set-CEnvVariable' {
     }
 
     It 'does not set environment variable if value has not changed' {
-        $name = '007'
+        $name = '110'
         GivenEnvVar $name -WithValue $name
         ThenEnvVar $name -Exists -AtScope Process -WithValue $name
         WhenSetting $name -WithArgs @{ Value = $name } -InformationVariable 'infoMsgs'
@@ -204,23 +285,8 @@ Describe 'Set-CEnvVariable' {
         $infoMsgs | Should -BeNullOrEmpty
     }
 
-    It 'sets multiple scopes' {
-        $name = '008'
-        WhenSetting $name -WithArgs @{ Value = $name ; Scope = @('Process', 'User') }
-        ThenEnvVar $name -Exists -AtScope Process -WithValue $name
-        ThenEnvVar $name -Exists -AtScope User -WithValue $name
-    }
-
-    It 'sets at distinct scopes' {
-        $name = '009'
-        WhenSetting $name -WithArgs @{ Value = "PROCESS_${name}" ; Scope = 'Process' }
-        WhenSetting $name -WithArgs @{ Value = "USER_${name}" ; Scope = 'User' }
-        ThenEnvVar $name -Exists -AtScope Process -WithValue "PROCESS_${name}"
-        ThenEnvVar $name -Exists -AtScope User -WithValue "USER_${name}"
-    }
-
     It 'sets at process scope by default' {
-        $name = '010'
+        $name = '120'
         WhenSetting $name -WithArgs @{ Value = $name }
         ThenEnvVar $name -Exists -AtScope Process -WithValue $name
     }

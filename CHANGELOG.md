@@ -31,6 +31,8 @@ If migrating from Carbon:
 * `Remove-CEnvVariable` accepts multiple environment names.
 * `Remove-CEnvVariable` accepts names piped in.
 * `Uninstall-CEnvVariable` function that uninstalls environment variables, but only if they exist.
+* Linux and macOS support to `Remove-CEnvVariable` and `Set-CEnvVariable` for managing process-level environment
+  variables. PowerShell and .NET do not support user-level and computer-level environment variables on Linux and macOS.
 
 ### Changed
 
