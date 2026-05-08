@@ -15,84 +15,107 @@ BeforeAll {
 
     Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath '..\Carbon.Environment' -Resolve) -Verbose:$false
 
-    $script:varName = ''
-    $script:testNum = 0
+    $script:varNamePrefix = 'CARBON_SETENVVAR_TEST_'
     $script:credentials = Import-Clixml -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\.cenvironment' -Resolve)
 
-    function Assert-TestEnvironmentVariableIs
+    function GivenEnvVar
     {
+        [CmdletBinding()]
         param(
-            [Object] $ExpectedValue,
+            [Parameter(Mandatory)]
+            [String] $Named,
 
-            $Scope,
+            [Parameter(Mandatory)]
+            [String] $WithValue,
 
-            $ExpectedName = $script:varName,
+            [EnvironmentVariableTarget] $AtScope,
 
-            [switch]$Force
+            [pscredential] $ForUser
         )
 
-        if ($Scope -eq 'Computer')
+        $Named = "${script:varNamePrefix}${Named}"
+
+        $setArgs = @{ }
+        if ($ForUser)
         {
-            $Scope = 'Machine'
+            $setArgs['Credential'] = $ForUser
+        }
+        elseif ($PSBoundParameters.ContainsKey('AtScope'))
+        {
+            $setArgs['Scope'] = $AtScope
         }
 
-        $actualValue = [Environment]::GetEnvironmentVariable($ExpectedName, $Scope)
+        Set-CEnvVariable -Name $Named -Value $WithValue @setArgs
+    }
 
-        if ($null -eq $ExpectedValue)
-        {
-            $actualValue | Should -BeNullOrEmpty
-        }
-        else
-        {
-            $actualValue | Should -Be $ExpectedValue
-        }
+    function ThenEnvVar
+    {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory, Position=0)]
+            [String] $Named,
+            [switch] $Not,
+            [switch] $Exists,
+            [String] $WithValue,
+            [Parameter(Mandatory, ParameterSetName='ForUser')]
+            [pscredential] $ForUser,
+            [Parameter(Mandatory, ParameterSetName='AtScope')]
+            [EnvironmentVariableTarget[]] $AtScope
+        )
 
-        if ($Scope -eq 'Process')
+        $Named = "${script:varNamePrefix}${Named}"
+
+        foreach ($scope in $AtScope)
         {
-            if (-not $Force)
+            if ($ForUser)
             {
-                $envPath = 'env:{0}' -f $ExpectedName
-                if ($null -eq $ExpectedValue)
+                Start-Job { [Environment]::GetEnvironmentVariable($using:Named, 'User') } -Credential $ForUser |
+                    Receive-Job -Wait -AutoRemoveJob |
+                    Should -Not:$Not -Be $WithValue
+            }
+            else
+            {
+                foreach ($_scope in $AtScope)
                 {
-                    Test-Path -Path $envPath | Should -BeFalse
-                }
-                else
-                {
-                    Test-Path -Path $envPath | Should -BeTrue
+                    [Environment]::GetEnvironmentVariable($Named, $_scope) | Should -Not:$Not -Be $WithValue
                 }
             }
+
         }
     }
 
-    function Assert-TestEnvironmentVariableSetInEnvDrive
+    function ThenError
     {
         param(
-            $ExpectedName = $script:varName,
-            $ExpectedValue
+            [switch] $Not,
+
+            [switch] $IsEmpty,
+
+            [String] $MatchesRegex
         )
 
-        $envPath = 'env:{0}' -f $ExpectedName
-        Test-Path -Path $envPath | Should -BeTrue
-        (Get-Item -Path $envPath).Value | Should -Be $ExpectedValue
+        if ($IsEmpty)
+        {
+            $Global:Error | Should -Not:$Not -BeNullOrEmpty
+        }
+
+        if ($MatchesRegex)
+        {
+            $Global:Error | Should -Not:$Not -Match $MatchesRegex
+        }
     }
 
-    function Set-TestEnvironmentVariable
+    function WhenSetting
     {
+        [CmdletBinding()]
         param(
-            $Scope,
-            $Value
+            [String] $Named,
+
+            [hashtable] $WithArgs = @{}
         )
 
-        $setArgs = @{ "For$Scope" = $true }
-
-        Set-CEnvVariable -Name $script:varName -Value $value @setArgs
-        Assert-TestEnvironmentVariableIs -ExpectedValue $value -Scope $Scope
-        return $value
-    }
-
-    function New-TestValue
-    {
-        [Guid]::NewGuid().ToString()
+        $Named = "${script:varNamePrefix}${Named}"
+        Set-CEnvVariable -Name $Named @WithArgs
     }
 }
 
@@ -100,107 +123,112 @@ AfterAll {
     & {
             [Environment]::GetEnvironmentVariables('Process').Keys
             [Environment]::GetEnvironmentVariables('User').Keys
-            [Environment]::GetEnvironmentVariables('Machine').Keys
-        } |
-        Where-Object { $_ -like 'CARBON_SETENVVAR_TEST_*' } |
-        Select-Object -Unique |
-        ForEach-Object {
-            $forComputerArg = @{}
             if (Test-TCRunAsElevated)
             {
-                $forComputerArg['ForComputer'] = $true
+                [Environment]::GetEnvironmentVariables('Machine').Keys
             }
-            Remove-CEnvVariable -Name $_ -ForProcess -ForUser @forComputerArg -ErrorAction Ignore
+        } |
+        Where-Object { $_ -like "${script:varNamePrefix}*" } |
+        Select-Object -Unique |
+        ForEach-Object {
+            if (Test-TCRunAsElevated)
+            {
+                [Environment]::SetEnvironmentVariable($_, [NullString]::Value, 'Machine')
+            }
+
+            [Environment]::SetEnvironmentVariable($_, [NullString]::Value, 'User')
+            [Environment]::SetEnvironmentVariable($_, [NullString]::Value, 'Process')
         }
 }
 
 Describe 'Set-CEnvVariable' {
     BeforeEach {
-        while ($true)
-        {
-            $script:testNum += 1
-            $script:varName = "CARBON_SETENVVAR_TEST_${script:testNum}"
-            if (-not [Environment]::GetEnvironmentVariable($script:varName, 'Process') -and
-                -not [Environment]::GetEnvironmentVariable($script:varName, 'User') -and
-                -not [Environment]::GetEnvironmentVariable($script:varName, 'Machine') -and
-                -not (Test-Path -Path "env:${script:varName}"))
-            {
-                break
-            }
-        }
+        $Global:Error.Clear()
     }
 
-    It 'sets machine-level variable' -Skip:(-not (Test-TCRunAsElevated)) {
-        $value = New-TestValue
-        Set-TestEnvironmentVariable -Scope Computer -Value $value
-        Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope User
-        Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope Process
-    }
-
-    It 'sets user-level variable for current user' {
-        $value = New-TestValue
-        Set-TestEnvironmentVariable -Scope User -Value $value
-        Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'Computer'
-        Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope Process
-    }
-
-    It 'sets process-level variable' {
-        $name = 'Carbon+Set-CEnvVariable+ForProcess'
-        $value = New-TestValue
-        Remove-CEnvVariable -Name $name -ForProcess -ForUser -ErrorAction Ignore
-
-        Set-CEnvVariable -Name $name -Value $value -ForProcess
-        try
-        {
-            Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'User' -ExpectedName $name
-            Assert-TestEnvironmentVariableIs -ExpectedValue $value -Scope 'Process' -ExpectedName $name
-            Assert-TestEnvironmentVariableSetInEnvDrive -ExpectedValue $value  -ExpectedName $name
-        }
-        finally
-        {
-            Remove-CEnvVariable -Name $name -ForProcess -ForUser
-        }
-    }
-
-    Context '<_> scope' -ForEach 'Computer','User','Process' {
+    Context '<_>-level' -ForEach 'Machine','User','Process' {
         $scope = $_
-        $skip = $scope -eq 'Computer' -and -not (Test-TCRunAsElevated)
+        $skip = $scope -eq 'Machine' -and -not (Test-TCRunAsElevated)
+        It 'creates variable' -ForEach $scope -Skip:$skip {
+            $name = "${_}_001"
+            WhenSetting $name -WithArgs @{ Value = $name ; Scope = $_ }
+            ThenEnvVar $name -Exists -AtScope $_ -WithValue $name
+            ThenError -IsEmpty
+        }
+
         It 'overwrites existing variable' -ForEach $scope -Skip:$skip {
-            $scope = $_
-            $value = New-TestValue
-            $scopeParam = @{
-                                ('For{0}' -f $scope) = $true
-                        }
-            Set-CEnvVariable -Name $script:varName -Value $value -Force @scopeParam
-            Assert-TestEnvironmentVariableIs -ExpectedValue $value -Scope $scope -Force
-            Assert-TestEnvironmentVariableSetInEnvDrive -ExpectedValue $value
+            $name = "${_}_002"
+            GivenEnvVar $name -WithValue 'old value' -AtScope $_
+            WhenSetting $name -WithArgs @{ Value = $name ; Scope = $_ }
+            ThenEnvVar $name -Exists -AtScope $_ -WithValue $name
+            ThenError -IsEmpty
         }
     }
 
     It 'supports WhatIf' {
-        Remove-CEnvVariable -Name $script:varName -ForProcess -ForUser -ErrorAction Ignore
-        Set-CEnvVariable -Name $script:varName -Value 'Doesn''t matter.' -ForProcess -WhatIf
-        Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'User'
-        Assert-TestEnvironmentVariableIs -ExpectedValue $null -Scope 'Process'
+        $name = '003'
+        WhenSetting $name -WithArgs @{ Value = 'neverset' ; WhatIf = $true }
+        ThenEnvVar $name -Not -Exists -AtScope 'Process','User','Machine'
+        ThenError -IsEmpty
     }
 
     It 'sets variable for another user' {
-        $name = [Guid]::NewGuid().ToString()
-        $expectedValue = New-TestValue
-        Set-CEnvVariable -Name $name -Value $expectedValue -ForUser -Credential $script:credentials
-        $job = Start-Job -ScriptBlock {
-            Get-Item -Path ('env:{0}' -f $using:name) | Select-Object -ExpandProperty 'Value'
-        } -Credential $script:credentials
-        $actualValue = $job | Wait-Job | Receive-Job
-        $job | Remove-Job -Force -ErrorAction Ignore
-
-        $actualValue | Should -Be $expectedValue
+        $name = '004'
+        WhenSetting $name -WithArgs @{ Value = $name ; Credential = $script:credentials }
+        ThenEnvVar $name -Not -Exists -AtScope 'Process','User','Machine'
+        ThenEnvVar $name -Exists -ForUser $script:credentials -WithValue $name
     }
 
     It 'hides value in information message' {
-        $testValue = New-TestValue
-        Set-CEnvVariable -Name $script:varName -Value $testValue -ForProcess -Sensitive -InformationVariable 'infoMsgs'
+        $name = '005'
+        $value = '~!@#$%^&*()_+'
+        WhenSetting $name -WithArgs @{ Value = $value ; Sensitive = $true } -InformationVariable 'infoMsgs'
+        ThenEnvVar $name -Exists -AtScope Process -WithValue $value
         $infoMsgs | Should -Not -BeNullOrEmpty
-        $infoMsgs[0].MessageData | Should -Not -Match ([regex]::Escape($testValue))
+        $infoMsgs[0].MessageData | Should -Not -Match ([regex]::Escape($value))
+    }
+
+    It 'allows empty string values' {
+        $name = '006'
+        WhenSetting $name -WithArgs @{ Value = '' }
+        # In .NET framework and .NET before 9, you couldn't set an enviironment variable to an empty string.
+        if ([Environment]::Version -lt [Version]::New(9, 0))
+        {
+            ThenEnvVar $name -Not -Exists -AtScope Process,User,Machine
+        }
+        else
+        {
+            ThenEnvVar $name -Exists -AtScope Process -WithValue ''
+        }
+    }
+
+    It 'does not set environment variable if value has not changed' {
+        $name = '007'
+        GivenEnvVar $name -WithValue $name
+        ThenEnvVar $name -Exists -AtScope Process -WithValue $name
+        WhenSetting $name -WithArgs @{ Value = $name } -InformationVariable 'infoMsgs'
+        ThenEnvVar $name -Exists -AtScope Process -WithValue $name
+        $infoMsgs | Should -BeNullOrEmpty
+    }
+
+    It 'sets multiple scopes' {
+        $name = '008'
+        WhenSetting $name -WithArgs @{ Value = $name ; Scope = @('Process', 'User') }
+        ThenEnvVar $name -Exists -AtScope Process -WithValue $name
+        ThenEnvVar $name -Exists -AtScope User -WithValue $name
+    }
+
+    It 'sets at distinct scopes' {
+        $name = '009'
+        WhenSetting $name -WithArgs @{ Value = "PROCESS_${name}" ; Scope = 'Process' }
+        WhenSetting $name -WithArgs @{ Value = "USER_${name}" ; Scope = 'User' }
+        ThenEnvVar $name -Exists -AtScope Process -WithValue "PROCESS_${name}"
+        ThenEnvVar $name -Exists -AtScope User -WithValue "USER_${name}"
+    }
+
+    It 'sets at process scope by default' {
+        $name = '010'
+        WhenSetting $name -WithArgs @{ Value = $name }
+        ThenEnvVar $name -Exists -AtScope Process -WithValue $name
     }
 }

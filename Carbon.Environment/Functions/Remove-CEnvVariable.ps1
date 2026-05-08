@@ -6,17 +6,18 @@ function Remove-CEnvVariable
     Removes an environment variable.
 
     .DESCRIPTION
-    The `Remove-CEnvVariable` function deletes environment variables. Pass the name to the `Name` parameter and
-    the scope(s) to remove it from with the `ForProcess`, `ForUser`, and/or `ForComputer` switches. If an environment
-    variable does not exist at that scope, the function writes an error. Uses the
-    `[Environment]::SetEnvironmentVariable` method to remove variable. Writes an information message for each
-    environment variable removed.
+    The `Remove-CEnvVariable` function deletes environment variables. Pass the names of the environment
+    variables to delete to the `Name` parameter (or pipe the names into the function). If an environment variable does
+    not exist at that scope, the function writes an error. Otherwise, the environment variable is deleted.
 
-    Changes to environment variables in the User and Machine scope are not picked up by running processes.  Any running
-    processes that use this environment variable should be restarted.
+    By default, operates on the current process's environment variables. Use the `Scope` parameter to remove user-level
+    and/or machine-level environment variables. Multiple scopes are accepted. Changes to environment variables are not
+    reflected in running processes, including the current PowerShell session. If you want the removal of the user-level
+    or machine-level environment variable to be reflected in the current process, include `Process` in the list of
+    scopes passed to the `Scope` parameter.
 
-    Normally, you have to restart your PowerShell session/process to no longer see the variable in the `env:` drive. Use
-    the `-Force` switch to also remove the variable from the `env:` drive.
+    To remove a user-level environment variable for a specific user, pass that user's credentials to the `-Credential`
+    parameter. A PowerShell process is run as that user to remove the environment variable.
 
     On Windows, environment variable names are case-insensitive. On Linux and macOS, environment variable names are
     case-sensitive.
@@ -25,112 +26,128 @@ function Remove-CEnvVariable
     Set-CEnvVariable
 
     .LINK
-    http://msdn.microsoft.com/en-us/library/z8te35sa
+    Test-CEnvVariable
 
     .EXAMPLE
-    Remove-CEnvVariable -Name 'MyEnvironmentVariable' -ForProcess
+    Remove-CEnvVariable -Name 'MyEnvironmentVariable'
 
-    Removes the `MyEnvironmentVariable` from the process scope.
+    Demonstrates how to remove an environment variable from the current process. In this example, the
+    `MyEnvironmentVariable` is removed. If it doesn't exist, an error is written.
 
     .EXAMPLE
-    Remove-CEnvVariable -Name 'SomeUsersVariable' -ForUser -Credential $credential
+    Remove-CEnvVariable -Name 'SomeComputerVariable' -Scope Machine
 
-    Demonstrates that you can remove another user's user-level environment variable by passing its credentials to the
-    `Credential` parameter. This runs a separate PowerShell process as that user to remove the variable.
+    Demonstrates how to remove a computer-level environment variable. In this example, the `SomeComputerVariable`
+    environment variable is removed from the computer's environment variables. If that computer-level variable doesn't
+    exist, an error is written.
+
+    .EXAMPLE
+    Remove-CEnvVariable -Name 'SomeUsersVariable' -Scope User
+
+    Demonstrates how to remove a user-level environment variable for the current user. In this example, the
+    `SomeUsersVariable` environment variable is removed from the current user's environment variables. If it doesn't
+    exist at the user scope, an error is written.
+
+    .EXAMPLE
+    Remove-CEnvVariable -Name 'SomeUsersVariable' -Scope Process,User
+
+    Demonstrates how to have the change to a user-level or machine-level environment variable reflected in the current
+    process by including `Process` in the list of scopes passed to `Scope`.
+
+    .EXAMPLE
+    Remove-CEnvVariable -Name 'SomeUsersVariable' -Credential $user
+
+    Demonstrates how to remove a user-level environment variable for a specific user. In this example, the
+    `SomeUsersVariable` environment variable is removed from the `$user` user's environment variables. If that user
+    doesn't have a `SomeUsersVariable` environment variable, an error is written.
+
+    .EXAMPLE
+    'Var1','Var2' | Remove-CEnvVariable
+
+    Demonstrates that you can pipe the environment variables to delete to `Remove-CEnvVariable`.
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName='ForCurrentUser')]
     param(
         # The environment variable to remove. Case-insensitive on Windows, case-sensitive on Linux and macOS.
-        [Parameter(Mandatory)]
-        [String] $Name,
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [String[]] $Name,
 
-        # Removes the environment variable for the current computer.
+        # The scopes at which to remove the environment variable. Default is the current process.
         [Parameter(ParameterSetName='ForCurrentUser')]
-        [switch] $ForComputer,
-
-        # Removes the environment variable for the current user.
-        [Parameter(ParameterSetName='ForCurrentUser')]
-        [Parameter(Mandatory, ParameterSetName='ForSpecificUser')]
-        [switch] $ForUser,
-
-        # Removes the environment variable for the current process.
-        [Parameter(ParameterSetName='ForCurrentUser')]
-        [switch] $ForProcess,
-
-        # Remove the variable from the current PowerShell session's `env:` drive, too. Normally, you have to restart
-        # your session to no longer see the variable in the `env:` drive.
-        [Parameter(ParameterSetName='ForCurrentUser')]
-        [switch] $Force,
+        [EnvironmentVariableTarget[]] $Scope,
 
         # Remove an environment variable for a specific user.
         [Parameter(Mandatory, ParameterSetName='ForSpecificUser')]
         [pscredential] $Credential
     )
 
-    Set-StrictMode -Version 'Latest'
-    Use-CallerPreference -Cmdlet $PSCmdlet -Session $ExecutionContext.SessionState
-
-    if ($PSCmdlet.ParameterSetName -eq 'ForSpecificUser')
+    begin
     {
-        $parameters = $PSBoundParameters
-        $parameters.Remove('Credential')
-        $job = Start-Job -ScriptBlock {
-            Import-Module -Name (Join-Path -Path $using:moduleDirPath -ChildPath 'Carbon.Environment.psm1')
-            $VerbosePreference = $using:VerbosePreference
-            $ErrorActionPreference = $using:ErrorActionPreference
-            $DebugPreference = $using:DebugPreference
-            $WhatIfPreference = $using:WhatIfPreference
-            Remove-CEnvVariable @using:parameters
-        } -Credential $Credential
-        $job | Wait-Job | Receive-Job
-        $job | Remove-Job -Force -ErrorAction Ignore
-        return
+        Set-StrictMode -Version 'Latest'
+        Use-CallerPreference -Cmdlet $PSCmdlet -Session $ExecutionContext.SessionState
+
+        $userEnvVars = [Collections.Generic.List[string]]::new()
+
+        if (-not $PSBoundParameters.ContainsKey('Scope'))
+        {
+            $Scope = [EnvironmentVariableTarget]::Process
+        }
+
+        # Delete at each scope once and delete from higher scopes first.
+        $Scope = $Scope | Select-Object -Unique | Sort-Object -Descending
     }
 
-    if (-not $ForProcess -and -not $ForUser -and -not $ForComputer)
+    process
     {
-        $msg = 'Environment variable target not specified. You must supply one of the ForComputer, ForUser, or ' +
-               'ForProcess switches.'
-        Write-Error -Message $msg -ErrorAction $ErrorActionPreference
-        return
-    }
+        if ($Credential)
+        {
+            $userEnvVars.AddRange( $Name )
+            return
+        }
 
-    Invoke-Command -ScriptBlock {
-            if ($ForComputer)
+        foreach ($_name in $Name)
+        {
+            foreach ($_scope in $Scope)
             {
-                [EnvironmentVariableTarget]::Machine
-            }
+                $target = "$($_scope.ToString().ToLowerInvariant())-level environment variable ""${_name}"""
 
-            if ($ForUser)
-            {
-                [EnvironmentVariableTarget]::User
-            }
-
-            if ($Force -or $ForProcess)
-            {
-                [EnvironmentVariableTarget]::Process
-            }
-        } |
-        Where-Object { $PSCmdlet.ShouldProcess( "${_}-level environment variable ""${Name}""", "remove" ) } |
-        ForEach-Object {
-                $scope = $_
-
-                if (-not (Test-CEnvVariable -Name $Name -Scope $scope))
+                if (-not (Test-CEnvVariable -Name $_name -Scope $_scope))
                 {
-                    # If forced, and we added the process scope, don't write an error
-                    if ($Force -and $scope -eq [EnvironmentVariableTarget]::Process -and -not $ForProcess)
-                    {
-                        continue
-                    }
-
-                    $msg = "Failed to delete ${Scope}-level environment variable ""${Name}"" because it does not " +
-                           'exist.'
+                    $msg = "Failed to delete ${target} because it does not exist."
                     Write-Error -Message $msg -ErrorAction $ErrorActionPreference
-                    return
+                    continue
                 }
 
-                $msg = "Removing $($Scope.ToString().ToLowerInvariant())-level environment variable ""${Name}""."
-                Write-Information $msg
-                [Environment]::SetEnvironmentVariable( $Name, [NullString]::Value, $scope )
+                if (-not $PSCmdlet.ShouldProcess($target, "remove"))
+                {
+                    continue
+                }
+
+                Write-Information "Removing ${target}."
+                [Environment]::SetEnvironmentVariable($_name, [NullString]::Value, $_scope)
             }
+        }
+    }
+
+    end
+    {
+        if (-not $Credential -or -not $userEnvVars.Count)
+        {
+            return
+        }
+
+        $parameters = $PSBoundParameters
+        [void]$parameters.Remove('Credential')
+        [void]$parameters.Remove('Name')
+        Start-Job -ScriptBlock {
+                    Import-Module -Name (Join-Path -Path $using:moduleDirPath -ChildPath 'Carbon.Environment.psm1')
+                    $VerbosePreference = $using:VerbosePreference
+                    $ErrorActionPreference = $using:ErrorActionPreference
+                    $DebugPreference = $using:DebugPreference
+                    $WhatIfPreference = $using:WhatIfPreference
+                    $InformationPreference = $using:InformationPreference
+                    Remove-CEnvVariable -Name $using:userEnvVars @using:parameters -Scope User
+                } -Credential $Credential |
+            Receive-Job -Wait -AutoRemoveJob
+    }
 }

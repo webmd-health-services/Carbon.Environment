@@ -15,27 +15,71 @@ BeforeAll {
 
     Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath '..\Carbon.Environment' -Resolve) -Verbose:$false
 
+    $script:varNamePrefix = 'CARBON_REMOVEENVVAR_'
     $script:varName = ''
     $script:testNum = 0
     $script:credentials = Import-Clixml -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\.cenvironment' -Resolve)
 
-    function Assert-NoTestEnvironmentVariableAt( $Scope )
+    function GivenEnvVar
     {
-        $actualValue = [Environment]::GetEnvironmentVariable($script:varName, $Scope)
-        $actualValue | Should -BeNullOrEmpty
+        param(
+            [Parameter(Mandatory)]
+            [String] $Named,
+
+            [EnvironmentVariableTarget[]] $AtScope,
+
+            [pscredential] $ForUser
+        )
+
+        if (-not $Named.StartsWith($script:varNamePrefix))
+        {
+            $Named = "${script:varNamePrefix}${Named}"
+        }
+
+        $setArgs = @{}
+        if ($ForUser)
+        {
+            $setArgs['Credential'] = $ForUser
+        }
+
+        if ($null -ne $AtScope)
+        {
+            $setArgs['Scope'] = $AtScope
+        }
+        Set-CEnvVariable -Name $Named -Value $PSBoundParameters['Named'] @setArgs
     }
 
-    function Set-TestEnvironmentVariable($Scope)
+    function ThenEnvVar
     {
-        $EnvVarValue = [Guid]::NewGuid().ToString()
-        [Environment]::SetEnvironmentVariable($script:varName, $EnvVarValue, $Scope)
-        Set-Item -Path ('env:{0}' -f $script:varName) -Value $EnvVarValue
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory, Position=0)]
+            [String] $Named,
+            [switch] $Not,
+            [switch] $Exists,
+            [Parameter(Mandatory, ParameterSetName='ForUser')]
+            [pscredential] $ForUser,
+            [Parameter(Mandatory, ParameterSetName='AtScope')]
+            [EnvironmentVariableTarget] $AtScope
+        )
 
-        $actualValue = [Environment]::GetEnvironmentVariable($script:varName, $Scope)
-        $actualValue | Should -Be $EnvVarValue
-        Test-Path -Path ('env:{0}' -f $script:varName) | Should -BeTrue
+        $Named = "${script:varNamePrefix}${Named}"
 
-        return $EnvVarValue
+        foreach ($scope in $AtScope)
+        {
+            if ($ForUser)
+            {
+                Start-Job { $null -ne [Environment]::GetEnvironmentVariable($using:Named, $using:scope) } `
+                          -Credential $ForUser | `
+                    Receive-Job -Wait -AutoRemoveJob | `
+                    Should -Not:$Not -BeTrue
+            }
+            else
+            {
+                Test-CEnvVariable -Name $Named -Scope $scope | Should -Not:$Not -BeTrue
+            }
+
+        }
     }
 
     function ThenError
@@ -58,140 +102,137 @@ BeforeAll {
             $Global:Error | Should -Not:$Not -Match $MatchesRegex
         }
     }
+
+    function WhenRemoving
+    {
+        param(
+            [String[]] $Named,
+            [hashtable] $WithArgs = @{}
+        )
+
+        $Named =
+            $Named |
+            ForEach-Object {
+                if ($_.StartsWith($script:varNamePrefix))
+                {
+                    return $_
+                }
+                return "${script:varNamePrefix}${_}"
+            }
+
+        Remove-CEnvVariable -Name $Named @WithArgs
+    }
 }
 
 AfterAll {
     & {
             [Environment]::GetEnvironmentVariables('Process').Keys
             [Environment]::GetEnvironmentVariables('User').Keys
-            [Environment]::GetEnvironmentVariables('Machine').Keys
-        } |
-        Where-Object { $_ -like 'CARBON_REMOVEENVVAR_TEST_*' } |
-        Select-Object -Unique |
-        ForEach-Object {
-            $forComputerArg = @{}
             if (Test-TCRunAsElevated)
             {
-                $forComputerArg['ForComputer'] = $true
+                [Environment]::GetEnvironmentVariables('Machine').Keys
             }
-            Remove-CEnvVariable -Name $_ -ForProcess -ForUser @forComputerArg -ErrorAction Ignore
+        } |
+        Where-Object { $_ -like "${script:varNamePrefix}*" } |
+        Select-Object -Unique |
+        ForEach-Object {
+            [Environment]::SetEnvironmentVariable($_, [NullString]::Value, [EnvironmentVariableTarget]::Process)
+            [Environment]::SetEnvironmentVariable($_, [NullString]::Value, [EnvironmentVariableTarget]::User)
+            if (Test-TCRunAsElevated)
+            {
+                [Environment]::SetEnvironmentVariable($_, [NullString]::Value, [EnvironmentVariableTarget]::Machine)
+            }
         }
 }
 
 Describe 'Remove-CEnvVariable' {
     BeforeEach {
-        while ($true)
-        {
-            $script:testNum += 1
-            $script:varName = "CARBON_REMOVEENVVAR_TEST_${script:testNum}"
-            if (-not [Environment]::GetEnvironmentVariable($script:varName, 'Process') -and
-                -not [Environment]::GetEnvironmentVariable($script:varName, 'User') -and
-                -not [Environment]::GetEnvironmentVariable($script:varName, 'Machine') -and
-                -not (Test-Path -Path "env:${script:varName}"))
-            {
-                break
-            }
-        }
-
         $Global:Error.Clear()
     }
 
-    It 'removes computer-level variable' -Skip:(-not (Test-TCRunAsElevated)) {
-        Set-TestEnvironmentVariable 'Machine'
-        Remove-CEnvVariable -Name $script:varName -ForComputer
-        Assert-NoTestEnvironmentVariableAt -Scope Machine
-    }
-
-    It 'removes user-level variable' {
-        Set-TestEnvironmentVariable 'User'
-        Remove-CEnvVariable -Name $script:varName -ForUser
-        Assert-NoTestEnvironmentVariableAt -Scope User
-    }
-
-    It 'removes process-level variable' {
-        Set-TestEnvironmentVariable 'Process'
-        Remove-CEnvVariable -Name $script:varName -ForProcess
-        Assert-NoTestEnvironmentVariableAt -Scope Process
-    }
-
-    Context '<_> scope' -ForEach 'Computer','User','Process' {
+    Context '<_>-level' -ForEach 'Machine','User','Process' {
         $scope = $_
-        $skip = $scope -eq 'Computer' -and -not (Test-TCRunAsElevated)
-        It 'removes variable with the Force' -ForEach $scope -Skip:$skip {
-            $scope = $_
-            $setScope = $scope
-            if( $scope -eq 'Computer' )
-            {
-                $setScope = 'Machine'
-            }
-            Set-TestEnvironmentVariable $setScope
-            $scopeParam = @{
-                                ('For{0}' -f $scope) = $true
-                        }
-            Remove-CEnvVariable -Name $script:varName @scopeParam -Force
-            Assert-NoTestEnvironmentVariableAt -Scope $setScope
-            Test-Path -Path ('env:{0}' -f $script:varName) | Should -BeFalse
+        $skip = $scope -eq 'Machine' -and -not (Test-TCRunAsElevated)
+        It 'removes variable' -ForEach $scope -Skip:$skip {
+            $name = "${_}_001"
+            GivenEnvVar $name -AtScope $_
+            WhenRemoving $name -WithArgs @{ Scope = $_ }
+            ThenEnvVar $name -AtScope $_ -Not -Exists
+            ThenError -IsEmpty
         }
     }
 
     It 'fails if variable does not exist' {
-        Remove-CEnvVariable -Name 'IDoNotExist' -ForProcess -ErrorAction SilentlyContinue
+        WhenRemoving '002' -WithArgs @{ ErrorAction = 'SilentlyContinue' }
         ThenError -Not -IsEmpty
         ThenError -MatchesRegex 'does not exist'
     }
 
     It 'ignores failures' {
-        Remove-CEnvVariable -Name 'IDoNotExist' -ForProcess -ErrorAction Ignore
+        WhenRemoving '003' -withArgs @{ ErrorAction = 'Ignore' }
         ThenError -IsEmpty
     }
 
-    It 'does not write an error when forcing removal at process scope' {
-        Remove-CEnvVariable -Name 'IDoNotExist' -ForUser -Force -ErrorAction SilentlyContinue
-        ThenError -Matches 'user-level'
-        ThenError -Not -Matches 'process-level'
-    }
-
     It 'supports WhatIf' {
-        $envVarValue = Set-TestEnvironmentVariable -Scope Process
-
-        Remove-CEnvVariable -Name $script:varName -ForProcess -WhatIf
-
-        $actualValue = [Environment]::GetEnvironmentVariable($script:varName, 'Process')
-        $actualValue | Should -Not -BeNullOrEmpty
-        $envVarValue | Should -Be $actualValue
+        $name = '004'
+        GivenEnvVar $name
+        WhenRemoving $name -WithArgs @{ WhatIf = $true }
+        ThenEnvVar $name -Exists -AtScope Process
     }
 
-    It 'removes from all scopes at once' {
-        $value = [Guid]::NewGuid().ToString()
-        $forComputerScopeArg = @{}
+    It 'removes from multiple scopes' {
+        $name = '005'
+        GivenEnvVar $name -AtScope Process
+        GivenEnvVar $name -AtScope User
         if (Test-TCRunAsElevated)
         {
-            $forComputerScopeArg['ForComputer'] = $true
+            GivenEnvVar $name -AtScope Machine
+        }
+        $scopes = @('Process', 'User')
+        if (Test-TCRunAsElevated)
+        {
+            $scopes += 'Machine'
         }
 
-        Set-CEnvVariable -Name $script:varName -Value $value -ForProcess -ForUser @forComputerScopeArg
-        Remove-CEnvVariable -Name $script:varName -ForProcess -ForUser @forComputerScopeArg
-        Assert-NoTestEnvironmentVariableAt -Scope Machine
-        Assert-NoTestEnvironmentVariableAt -Scope User
-        Assert-NoTestEnvironmentVariableAt -Scope Process
+        WhenRemoving $name -WithArgs @{ Scope = $scopes }
+        ThenEnvVar $name -AtScope Process -Not -Exists
+        ThenEnvVar $name -AtScope User -Not -Exists
+        ThenEnvVar $name -AtScope Machine -Not -Exists
     }
 
-    It 'requires at least one scope' {
-        Remove-CEnvVariable -Name $script:varName -ErrorAction SilentlyContinue
-        $Global:Error | Should -Match 'target not specified'
+    It 'removes at process scope by default' {
+        $name = '006'
+        GivenEnvVar $name -AtScope Process
+        WhenRemoving $name
+        ThenEnvVar $name -AtScope Process -Not -Exists
     }
 
     It 'removes variable for another user' {
-        $name = [Guid]::NewGuid().ToString()
-        $value = [Guid]::NewGuid().ToString()
-        Set-CEnvVariable -Name $name -Value $value -ForUser -Credential $script:credentials
-        Remove-CEnvVariable -Name $name -ForUser -Credential $script:credentials
-        $actualValue = $value
-        $job = Start-Job -ScriptBlock {
-            Get-Item -Path ('env:{0}' -f $using:name) -ErrorAction Ignore
-        } -Credential $script:credentials
-        $actualValue = $job | Wait-Job | Receive-Job
-        $job | Remove-Job -Force -ErrorAction Ignore
-        $actualValue | Should -BeNullOrEmpty
+        $name = '007'
+        GivenEnvVar $name -ForUser $script:credentials
+        GivenEnvVar $name -AtScope Process
+        WhenRemoving $name -WithArgs @{ Credential = $script:credentials }
+        ThenEnvVar $name -ForUser $script:credentials -Not -Exists
+        ThenEnvVar $name -AtScope Process -Exists
+    }
+
+    It 'accepts pipeline input' {
+        $name = "${script:varNamePrefix}008"
+        $name2 = "${script:varNamePrefix}009"
+        GivenEnvVar $name
+        GivenEnvVar $name2
+        $name, $name2 | Remove-CEnvVariable
+        ThenEnvVar $name -AtScope Process -Not -Exists
+        ThenEnvVar $name2 -AtScope Process -Not -Exists
+    }
+
+    It 'accepts multiple names' {
+        $name = '010'
+        $name2 = '011'
+        GivenEnvVar $name
+        GivenEnvVar $name2
+        WhenRemoving $name,$name2
+        ThenEnvVar $name -AtScope Process -Not -Exists
+        ThenEnvVar $name2 -AtScope Process -Not -Exists
     }
 }

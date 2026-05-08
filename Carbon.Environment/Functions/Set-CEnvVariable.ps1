@@ -6,20 +6,29 @@ function Set-CEnvVariable
     Creates or sets an environment variable.
 
     .DESCRIPTION
-    The `Set-CEnvVariable` function creates or sets en environment variable value. It uses
-    `[Environment]::SetEnvironmentVariable`. Pass the name of the environment variable to the `Name` parameter, the
-    value to the `Value` parameter. To set the variable computer-wide, use the `ForComputer` switch. To set the variable
-    for the current user, use the `ForUser` switch. To set the variable for the current process, use the `ForProcess`
-    switch. Multiple scopes are accepted.
+    The `Set-CEnvVariable` function creates or sets an environment variable. Pass the name of the environment
+    variable to the `Name` parameter and the value to the `Value` parameter. An environment variable with that name and
+    value is set for the current process. Use the `Scope` parameter to set user-level and/or machine-level variables.
+    Uses `[Environment]::SetEnvironmentVariable` to create the variable if it doesn't exist, or update its value if the
+    variable exists and its value is different from the value being set.
 
-    Changes to environment variables in the User and Machine scope are not picked up by running processes.  Any running
-    processes that use this environment variable should be restarted.
+    By default, creates and sets the current process's environment variables. Use the `Scope` parameter to remove
+    user-level and/or machine-level environment variables. Multiple scopes are accepted. Changes to environment
+    variables are not reflected in running processes, including the current PowerShell session. If you want a new or
+    changed user-level or machine-level environment variable to be reflected in the current process, include `Process`
+    in the list of scopes passed to the `Scope` parameter.
 
-    To set an environment variable for a specific user, pass that user's credentials to the `-Credential` parameter.
-    This will run a PowerShell process as that user in order to set the environment variable.
+    Writes an information message for each environment variable created or updated. The message includes the value being
+    set. Use the `Sensitive` switch to omit the value from the information message.
 
-    Normally, you have to restart your PowerShell session/process to see the variable in the `env:` drive. Use the
-    `-Force` switch to also add the variable to the `env:` drive.
+    On Windows, environment variable names are case-insensitive. On Linux and macOS, environment variable names are
+    case-sensitive.
+
+    In PowerShell 7.4 and earlier, setting `Value` to an empty string deletes the variable. In newer versions of
+    PowerShell, the variable is set to an empty value.
+
+    To create or set an environment variable for a specific user, pass that user's credentials to the `-Credential`
+    parameter. This will run a PowerShell process that creates or sets the environment variable.
 
     .LINK
     Remove-CEnvVariable
@@ -28,55 +37,59 @@ function Set-CEnvVariable
     Test-CEnvVariable
 
     .EXAMPLE
-    Set-CEnvVariable -Name 'MyEnvironmentVariable' -Value 'Value1' -ForProcess
+    Set-CEnvVariable -Name 'MyEnvironmentVariable' -Value 'Value1'
 
-    Creates the `MyEnvironmentVariable` with an initial value of `Value1` in the process scope, i.e. the variable is
-    only accessible in the current process.
-
-    .EXAMPLE
-    Set-CEnvVariable -Name 'MyEnvironmentVariable' -Value 'Value1' -ForComputer
-
-    Creates the `MyEnvironmentVariable` with an initial value of `Value1` in the machine scope, i.e. the variable is
-    accessible in all newly launched processes.
+    Demonstrates how to create or set an environemnt variable for the current process. In this example, the current
+    process's `MyEnvironmentVariable` variable is created or set with a value of `Value1`.
 
     .EXAMPLE
-    Set-CEnvVariable -Name 'SomeUsersEnvironmentVariable' -Value 'SomeValue' -ForUser -Credential $userCreds
+    Set-CEnvVariable -Name 'MyEnvironmentVariable' -Value 'Value1' -Scope Machine
 
-    Demonstrates that you can set a user-level environment variable for another user by passing its credentials to the
-    `Credential` parameter. Runs a separate PowerShell process as that user to set the environment variable.
+    Demonstrates how to create a computer-level environment variable by including `Machine` in the list of scopes passed
+    to the `Scope` parameter. The current process's environment variables will not have the new or updated environment
+    variable.
 
     .EXAMPLE
-    Set-CEnvVariable -Name 'MySensitiveEnvironmentVariable' -Value 'SecretValue' -ForProcess -Sensitive
+    Set-CEnvVariable -Name 'MyEnvironmentVariable' -Value 'Value1' -Scope User
 
-    Demonstrates how to omit the environment variable value from the information message output by this function.
+    Demonstrates how to create a user environment variable by including `User` in the list of scopes passed to the
+    `Scope` parameter. The current process's environment variables will not have the new or updated environment
+    variable.
+
+    .EXAMPLE
+    Set-CEnvVariable -Name 'MyEnvironmentVariable' -Value 'Value1' -Scope Process,User
+
+    Demonstrates how to have a change to a user or machine-level environment variable reflected in the current process
+    by including `Process` in the list of scopes passed to the `Scope` parameter.
+
+    .EXAMPLE
+    Set-CEnvVariable -Name 'SomeUsersEnvironmentVariable' -Value 'SomeValue' -Credential $userCreds
+
+    Demonstrates how to set an environment variable for a specific user by passing that user's credentials to the
+    `Credential` parameter.
+
+    .EXAMPLE
+    Set-CEnvVariable -Name 'MySensitiveEnvironmentVariable' -Value 'SecretValue' -Sensitive
+
+    Demonstrates how to omit the environment variable's value from the information message output by this function.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        # The name of environment variable to add/set.
+        # The name of environment variable to add/set. Case-insensitive on Windows. Case-sensitive on Linux and macOS.
         [Parameter(Mandatory)]
         [String] $Name,
 
-        # The environment variable's value.
+        # The environment variable's value. In PowerShell 7.4 and earlier, setting this to an empty string deletes the
+        # variable. In newer versions, the variable is created with an empty value.
         [Parameter(Mandatory)]
+        [AllowEmptyString()]
         [String] $Value,
 
-        # Sets the environment variable for the current computer.
+        # The scopes at which to set the variable. Default is the current process. Changes to user-level and
+        # computer-level variables are not reflected in the current process's environment variables unless `Process` is
+        # in this list.
         [Parameter(ParameterSetName='ForCurrentUser')]
-        [switch] $ForComputer,
-
-        # Sets the environment variable for the current user.
-        [Parameter(ParameterSetName='ForCurrentUser')]
-        [Parameter(Mandatory, ParameterSetName='ForSpecificUser')]
-        [switch] $ForUser,
-
-        # Sets the environment variable for the current process.
-        [Parameter(ParameterSetName='ForCurrentUser')]
-        [switch] $ForProcess,
-
-        # Set the variable in the current PowerShell session's `env:` drive, too. Normally, you have to restart your
-        # session to see the variable in the `env:` drive.
-        [Parameter(ParameterSetName='ForCurrentUser')]
-        [switch] $Force,
+        [EnvironmentVariableTarget[]] $Scope,
 
         [Parameter(Mandatory,ParameterSetName='ForSpecificUser')]
         # Set an environment variable for a specific user.
@@ -92,52 +105,51 @@ function Set-CEnvVariable
     if( $PSCmdlet.ParameterSetName -eq 'ForSpecificUser' )
     {
         $parameters = $PSBoundParameters
-        $parameters.Remove('Credential')
+        [void]$parameters.Remove('Credential')
         $job = Start-Job -ScriptBlock {
             Import-Module -Name (Join-Path -path $using:moduleDirPath -ChildPath 'Carbon.Environment.psm1' -Resolve)
             $VerbosePreference = $using:VerbosePreference
             $ErrorActionPreference = $using:ErrorActionPreference
             $DebugPreference = $using:DebugPreference
             $WhatIfPreference = $using:WhatIfPreference
-            Set-CEnvVariable @using:parameters
+            $InformationPreference = $using:InformationPreference
+            Set-CEnvVariable @using:parameters -Scope User
         } -Credential $Credential
         $job | Wait-Job | Receive-Job
         $job | Remove-Job -Force -ErrorAction Ignore
         return
     }
 
-    if( -not $ForProcess -and -not $ForUser -and -not $ForComputer )
+    if (-not $PSBoundParameters.ContainsKey('Scope'))
     {
-        Write-Error -Message ('Environment variable target not specified. You must supply one of the ForComputer, ForUser, or ForProcess switches.')
-        return
+        $Scope = [EnvironmentVariableTarget]::Process
     }
 
-    Invoke-Command -ScriptBlock {
-            if( $ForComputer )
-            {
-                [EnvironmentVariableTarget]::Machine
-            }
+    # Set at lower scopes first.
+    $Scope = $Scope | Select-Object -Unique | Sort-Object
 
-            if( $ForUser )
-            {
-                [EnvironmentVariableTarget]::User
-            }
-
-            if( $Force -or $ForProcess )
-            {
-                [EnvironmentVariableTarget]::Process
-            }
-        } |
-        Where-Object { $PSCmdlet.ShouldProcess( "${_}-level environment variable ""${Name}""", "set") } |
-        ForEach-Object {
-            $valueMsg = " to ""${Value}"""
-            if ($Sensitive)
-            {
-                $valueMsg = ''
-            }
-
-            $msg = "Setting $($_.ToString().ToLowerInvariant())-level environment variable ""${Name}""${valueMsg}."
-            Write-Information $msg
-            [Environment]::SetEnvironmentVariable( $Name, $Value, $_ )
+    foreach ($_scope in $Scope)
+    {
+        # Only set the variable if its value has changed.
+        if ($Value -eq [Environment]::GetEnvironmentVariable($Name, $_scope))
+        {
+            continue
         }
+
+        $target = "$($_scope.ToString().ToLowerInvariant())-level environment variable ""${Name}"""
+
+        if (-not $PSCmdlet.ShouldProcess($target, "set"))
+        {
+            continue
+        }
+
+        $valueMsg = " to ""${Value}"""
+        if ($Sensitive)
+        {
+            $valueMsg = ''
+        }
+
+        Write-Information "Setting ${target}${valueMsg}."
+        [Environment]::SetEnvironmentVariable($Name, $Value, $_scope)
+    }
 }
