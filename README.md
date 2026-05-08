@@ -1,6 +1,6 @@
 # Overview
 
-The Carbon.Environment PowerShell module configures and manages the current environment.
+The Carbon.Environment PowerShell module creates, sets, tests, and removes environment variables.
 
 # System Requirements
 
