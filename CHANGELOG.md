@@ -30,6 +30,7 @@ If migrating from Carbon:
 * `Test-CEnvVariable` for testing if an environment variable exists.
 * `Remove-CEnvVariable` accepts multiple environment names.
 * `Remove-CEnvVariable` accepts names piped in.
+* `Uninstall-CEnvVariable` function that uninstalls environment variables, but only if they exist.
 
 ### Changed
 

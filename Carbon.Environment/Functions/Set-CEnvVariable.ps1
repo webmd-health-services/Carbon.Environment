@@ -36,6 +36,9 @@ function Set-CEnvVariable
     .LINK
     Test-CEnvVariable
 
+    .LINK
+    Uninstall-CEnvVariable
+
     .EXAMPLE
     Set-CEnvVariable -Name 'MyEnvironmentVariable' -Value 'Value1'
 

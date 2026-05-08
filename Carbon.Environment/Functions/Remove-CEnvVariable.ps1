@@ -28,6 +28,9 @@ function Remove-CEnvVariable
     .LINK
     Test-CEnvVariable
 
+    .LINK
+    Uninstall-CEnvVariable
+
     .EXAMPLE
     Remove-CEnvVariable -Name 'MyEnvironmentVariable'
 

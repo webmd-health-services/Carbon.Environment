@@ -120,25 +120,18 @@ BeforeAll {
 }
 
 AfterAll {
+    $scopes = @('Process','User')
     & {
             [Environment]::GetEnvironmentVariables('Process').Keys
             [Environment]::GetEnvironmentVariables('User').Keys
             if (Test-TCRunAsElevated)
             {
                 [Environment]::GetEnvironmentVariables('Machine').Keys
+                $scopes += 'Machine'
             }
         } |
         Where-Object { $_ -like "${script:varNamePrefix}*" } |
-        Select-Object -Unique |
-        ForEach-Object {
-            if (Test-TCRunAsElevated)
-            {
-                [Environment]::SetEnvironmentVariable($_, [NullString]::Value, 'Machine')
-            }
-
-            [Environment]::SetEnvironmentVariable($_, [NullString]::Value, 'User')
-            [Environment]::SetEnvironmentVariable($_, [NullString]::Value, 'Process')
-        }
+        Uninstall-CEnvVariable -Scope $scopes
 }
 
 Describe 'Set-CEnvVariable' {

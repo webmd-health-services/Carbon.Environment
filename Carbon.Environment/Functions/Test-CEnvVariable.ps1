@@ -22,6 +22,9 @@ function Test-CEnvVariable
     .LINK
     Set-CEnvVariable
 
+    .LINK
+    Uninstall-CEnvVariable
+
     .EXAMPLE
     Test-CEnvVariable -Name 'PATH'
 
