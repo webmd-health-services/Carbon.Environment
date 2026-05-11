@@ -20,7 +20,7 @@ BeforeAll {
 
     Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath '..\Carbon.Environment' -Resolve) -Verbose:$false
 
-    $script:varNamePrefix = 'CARBON_UNINSTALLENVVAR_'
+    $script:varNamePrefix = "CARBON_UNINSTALLENVVAR_$($PSVersionTable['PSEdition'])_"
     $script:credentials = Import-Clixml -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\.cenvironment' -Resolve)
 
     function GivenEnvVar
@@ -31,7 +31,9 @@ BeforeAll {
 
             [EnvironmentVariableTarget] $AtScope,
 
-            [pscredential] $ForUser
+            [pscredential] $ForUser,
+
+            [String[]] $WithValue
         )
 
         if ($Named -notlike "${script:varNamePrefix}*")
@@ -48,7 +50,14 @@ BeforeAll {
         {
             $setArgs['Scope'] = $AtScope
         }
-        Set-CEnvVariable -Name $Named -Value $PSBoundParameters['Named'] @setArgs
+
+        $value = $WithValue -join [IO.Path]::PathSeparator
+        if (-not $PSBoundParameters.ContainsKey('WithValue'))
+        {
+            $value = $PSBoundParameters['Named']
+        }
+
+        Set-CEnvVariable -Name $Named -Value $value @setArgs
     }
 
     function ThenEnvVar
@@ -59,7 +68,8 @@ BeforeAll {
             [switch] $Not,
             [switch] $Exists,
             [pscredential] $ForUser,
-            [EnvironmentVariableTarget[]] $AtScope
+            [EnvironmentVariableTarget[]] $AtScope,
+            [String[]] $WithValue
         )
 
         if ($Named -notlike "${script:varNamePrefix}*")
@@ -75,9 +85,14 @@ BeforeAll {
             return
         }
 
+        $expectedValue = $WithValue -join [IO.Path]::PathSeparator
         foreach ($scope in $AtScope)
         {
             Test-CEnvVariable -Name $Named -Scope $scope | Should -Not:$Not -BeTrue
+            if ($PSBoundParameters.ContainsKey('WithValue'))
+            {
+                [Environment]::GetEnvironmentVariable($Named, $scope) | Should -Be $expectedValue
+            }
         }
     }
 
@@ -104,6 +119,7 @@ BeforeAll {
 
     function WhenUninstalling
     {
+        [CmdletBinding()]
         param(
             [String[]] $Named,
 
@@ -279,7 +295,7 @@ Describe 'Uninstall-CEnvVariable' {
         ThenError -IsEmpty
     }
 
-    It 'removess from process scope by default' {
+    It 'removes from process scope by default' {
         $name = '120'
         GivenEnvVar $name -AtScope Process
         ThenEnvVar $name -Exists -AtScope Process
@@ -295,5 +311,75 @@ Describe 'Uninstall-CEnvVariable' {
         WhenUninstalling $name,$name2
         ThenEnvVar $name -Not -Exists -AtScope Process
         ThenEnvVar $name2 -Not -Exists -AtScope Process
+    }
+
+
+    Context 'is a list' {
+        It 'removes items' {
+            $name = '140'
+            GivenEnvVar $name -WithValue @('one', 'two', 'three', 'four')
+            WhenUninstalling $name -WithArgs @{ Item = @('two', 'four') }
+            ThenEnvVar $name -AtScope Process -Exists -WithValue @('one', 'three')
+        }
+
+        Context 'item does not exist' {
+            It 'removes items that do exist' {
+                $name = '150'
+                GivenEnvVar $name -WithValue @('one', 'two', 'three')
+                WhenUninstalling $name -WithArgs @{ Item = @('three', 'five', 'six') }
+                ThenEnvVar $name -AtScope Process -Exists -WithValue @('one', 'two')
+                ThenError -IsEmpty
+            }
+
+            It 'can exclude items from information message' {
+                $name = '160'
+                GivenEnvVar $name -WithValue @('one', 'two', 'three')
+                WhenUninstalling $name `
+                                 -WithArgs @{ Item = @('three') ; Sensitive = $true } `
+                                 -InformationVariable 'infoMsgs'
+                ThenEnvVar $name -AtScope Process -Exists -WithValue @('one', 'two')
+                ThenError -IsEmpty
+                $infoMsgs | Should -Not -Match 'three'
+            }
+        }
+
+        It 'uses custom separator' {
+            $name = '170'
+            GivenEnvVar $name -WithValue '1|2|3|4'
+            WhenUninstalling $name -WithArgs @{ Item = @('2', '3') ; Separator = '|'}
+            ThenEnvVar $name -AtScope Process -Exists -WithValue '1|4'
+            ThenError -IsEmpty
+        }
+
+        It 'supports WhatIf' {
+            $name = '180'
+            GivenEnvVar $name -WithValue @('a', 'b', 'c')
+            WhenUninstalling $name -WithArgs @{ Item = 'b' ; WhatIf = $true }
+            ThenEnvVar $name -AtScope Process -Exists -WithValue @('a', 'b', 'c')
+            ThenError -IsEmpty
+        }
+
+        Context 'deleting all items from the list' {
+            $allowsEmptyEnvVar = [Environment]::Version -ge ([Version]::New(9, 0))
+            Context 'allows setting empty environment variables' -Skip:(-not $allowsEmptyEnvVar) {
+                It 'does not delete the environment variable' {
+                    $name = '190'
+                    GivenEnvVar $name -WithValue @('e', 'f', 'g')
+                    WhenUninstalling $name -WithArgs @{ Item = @('e', 'f', 'g') }
+                    ThenEnvVar $name -AtScope PRocess -Exists -WithValue ''
+                    ThenError -IsEmpty
+                }
+            }
+
+            Context 'does not allow setting empty environment variables' -Skip:$allowsEmptyEnvVar {
+                It 'deletes the environment variable' {
+                    $name = '200'
+                    GivenEnvVar $name -WithValue @('e', 'f', 'g')
+                    WhenUninstalling $name -WithArgs @{ Item = @('e', 'f', 'g') }
+                    ThenEnvVar $name -AtScope Process -Not -Exists
+                    ThenError -IsEmpty
+                }
+            }
+        }
     }
 }

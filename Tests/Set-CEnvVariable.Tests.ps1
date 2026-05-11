@@ -20,7 +20,7 @@ BeforeAll {
 
     Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath '..\Carbon.Environment' -Resolve) -Verbose:$false
 
-    $script:varNamePrefix = 'CARBON_SETENVVAR_TEST_'
+    $script:varNamePrefix = "CARBON_SETENVVAR_TEST_$($PSVersionTable['PSEdition'])_"
     $script:credentials = Import-Clixml -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\.cenvironment' -Resolve)
 
     function GivenEnvVar
@@ -31,7 +31,7 @@ BeforeAll {
             [String] $Named,
 
             [Parameter(Mandatory)]
-            [String] $WithValue,
+            [String[]] $WithValue,
 
             [EnvironmentVariableTarget] $AtScope,
 
@@ -50,7 +50,9 @@ BeforeAll {
             $setArgs['Scope'] = $AtScope
         }
 
-        Set-CEnvVariable -Name $Named -Value $WithValue @setArgs
+        $actualValue = $WithValue -join ([IO.Path]::PathSeparator)
+
+        Set-CEnvVariable -Name $Named -Value $actualValue @setArgs
     }
 
     function ThenEnvVar
@@ -61,7 +63,7 @@ BeforeAll {
             [String] $Named,
             [switch] $Not,
             [switch] $Exists,
-            [String] $WithValue,
+            [String[]] $WithValue,
             [Parameter(Mandatory, ParameterSetName='ForUser')]
             [pscredential] $ForUser,
             [Parameter(Mandatory, ParameterSetName='AtScope')]
@@ -70,19 +72,21 @@ BeforeAll {
 
         $Named = "${script:varNamePrefix}${Named}"
 
+        $expectedValue = $WithValue -join ([IO.Path]::PathSeparator)
+
         foreach ($scope in $AtScope)
         {
             if ($ForUser)
             {
                 Start-Job { [Environment]::GetEnvironmentVariable($using:Named, 'User') } -Credential $ForUser |
                     Receive-Job -Wait -AutoRemoveJob |
-                    Should -Not:$Not -Be $WithValue
+                    Should -Not:$Not -Be $expectedValue
             }
             else
             {
                 foreach ($_scope in $AtScope)
                 {
-                    [Environment]::GetEnvironmentVariable($Named, $_scope) | Should -Not:$Not -Be $WithValue
+                    [Environment]::GetEnvironmentVariable($Named, $_scope) | Should -Not:$Not -Be $expectedValue
                 }
             }
 
@@ -289,5 +293,50 @@ Describe 'Set-CEnvVariable' {
         $name = '120'
         WhenSetting $name -WithArgs @{ Value = $name }
         ThenEnvVar $name -Exists -AtScope Process -WithValue $name
+    }
+
+    Context 'lists' {
+        It 'adds an item to an empty list' {
+            $name = '130'
+            WhenSetting $name -WithArgs @{ Item = $name }
+            ThenEnvVar $name -Exists -AtScope Process -WithValue $name
+        }
+
+        It 'prepends items to a list' {
+            $name = '140'
+            GivenEnvVar $name -WithValue @('five','six','seven')
+            WhenSetting $name -WithArgs @{ Item = @('one', 'two', 'three') }
+            ThenEnvVar $name -Exists -AtScope Process -WithValue @('one', 'two', 'three', 'five', 'six', 'seven')
+        }
+
+        It 'append items to a list' {
+            $name = '150'
+            GivenEnvVar $name -WithValue @('five','six','seven')
+            WhenSetting $name -WithArgs @{ Item = @('one', 'two', 'three') ; Append = $true }
+            ThenEnvVar $name -Exists -AtScope Process -WithValue @('five', 'six', 'seven', 'one', 'two', 'three')
+        }
+
+        It 'skips items already in the list' {
+            $name = '160'
+            GivenEnvVar $name -WithValue @('five','six','seven')
+            WhenSetting $name -WithArgs @{ Item = @('five', 'six', 'three') }
+            ThenEnvVar $name -Exists -AtScope Process -WithValue @('three', 'five', 'six', 'seven')
+        }
+
+        It 'uses custom separator' {
+            $name = '170'
+            GivenEnvVar $name -WithValue 'five|six|seven'
+            WhenSetting $name -WithArgs @{ Item = @('ten', '11', 'twe12e') ; Separator = '|' }
+            ThenEnvVar $name -Exists -AtScope Process -WithValue 'ten|11|twe12e|five|six|seven'
+        }
+
+        It 'adds at multiple scopes' -Skip:(-not $IsWindows) {
+            $name = '180'
+            GivenEnvVar $name -WithValue 'process' -AtScope Process
+            GivenEnvVar $name -WithValue 'user' -AtScope User
+            WhenSetting $name -WithArgs @{ Item = $name ; Scope = 'Process','User' }
+            ThenEnvVar $name -Exists -AtScope Process -WithValue @($name,'process')
+            ThenEnvVar $name -Exists -AtScope User -WithValue @($name,'user')
+        }
     }
 }

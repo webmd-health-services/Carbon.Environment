@@ -78,6 +78,7 @@
     FunctionsToExport = @(
         'Remove-CEnvVariable',
         'Set-CEnvVariable',
+        'Split-CEnvVariable',
         'Test-CEnvVariable',
         'Uninstall-CEnvVariable'
     )

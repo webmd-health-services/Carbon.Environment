@@ -20,7 +20,7 @@ BeforeAll {
 
     Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath '..\Carbon.Environment' -Resolve) -Verbose:$false
 
-    $script:varNamePrefix = 'CARBON_SETENVVAR_TEST_'
+    $script:varNamePrefix = "CARBON_TESTENVVAR_TEST_$($PSVersionTable['PSEdition'])_"
     $script:credentials = Import-Clixml -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\.cenvironment' -Resolve)
 
     function GivenEnvVar
@@ -32,7 +32,9 @@ BeforeAll {
 
             [EnvironmentVariableTarget] $AtScope,
 
-            [pscredential] $ForUser
+            [pscredential] $ForUser,
+
+            [String] $WithValue
         )
 
         $Named = "${script:varNamePrefix}${Named}"
@@ -47,7 +49,13 @@ BeforeAll {
             $setArgs['Scope'] = $AtScope
         }
 
-        Set-CEnvVariable -Name $Named -Value $PSBoundParameters['Named'] @setArgs
+        $value = $PSBoundParameters['Named']
+        if ($PSBoundParameters.ContainsKey('WithValue'))
+        {
+            $value = $WithValue
+        }
+
+        Set-CEnvVariable -Name $Named -Value $value @setArgs
     }
 
 
@@ -193,6 +201,31 @@ Describe 'Test-CEnvVariable' {
         Get-ChildItem -Path 'env:' | Test-CEnvVariable | Should -BeTrue
         'IDoNotExist' | Test-CEnvVariable | Should -BeFalse
         ThenError -IsEmpty
+    }
+
+    Context 'is a list' {
+        It 'finds an item' {
+            $paths = Split-CEnvVariable -Name 'PATH'
+            foreach ($path in $paths)
+            {
+                Test-CEnvVariable -Name 'PATH' -Item $path | Should -BeTrue
+            }
+        }
+
+        It 'does not find an item' {
+            Test-CEnvVariable -Name 'PATH' -Item 'SomePathThatDoesNotExist' | Should -BeFalse
+        }
+
+        It 'uses custom separator' {
+            $firstPath = Split-CEnvVariable -Name 'PATH' | Select-Object -First 1
+            Test-CEnvVariable -Name 'PATH' -Item $firstPath -Separator '|' | Should -BeFalse
+            Test-CEnvVariable -Name 'PATH' -Item $firstPath | Should -BeTrue
+
+            $name = '100'
+            GivenEnvVar $name -AtScope Process -WithValue 'a|b|c|d'
+            WhenTesting $name -WithArgs @{ Item = 'd' ; Separator = '|' } | Should -BeTrue
+            WhenTesting $name -WithArgs @{ Item = 'e' ; Separator = '|' } | Should -BeFalse
+        }
     }
 
 }

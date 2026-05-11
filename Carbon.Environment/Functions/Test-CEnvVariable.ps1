@@ -3,16 +3,25 @@ function Test-CEnvVariable
 {
     <#
     .SYNOPSIS
-    Tests if an environment variable exists.
+    Tests if an environment variable exists or contains an item.
 
     .DESCRIPTION
-    The `Test-CEnvVariable` function tests if an environment variable exists. Pass the name of the variable to
-    the `Name` parameter (or pipe in multiple names). If a variable with that name exists in the current process,
-    returns `$true`. Otherwise, returns `$false`.
+    The `Test-CEnvVariable` function tests if an environment variable exists or, if an environment variable is a
+    list, if the list contains an item.
+
+    To check if an environment variable exits, pass the name of the variable to the `Name` parameter (or pipe in
+    multiple names). If a variable with that name exists in the current process, returns `$true`. Otherwise, returns
+    `$false`.
+
+    To check if an item exists in an environment variable that is a list (e.g. `PATH`, `PSModulePath`, etc.), pass the
+    name of the environment variable to the `Name` parameter and the item to check to the `Item` parameter. Splits the
+    environment variable using `[IO.Path]::PathSeparator` (`;` on Windows, `:` on Linux and macOS) and returns true if
+    the item is in that list. Returns false if the environment variable doesn't exist or doesn't have the item. Use the
+    `Separator` parameter to use custom separator.
 
     By default, checks in the current process's environment variables. PowerShell and .NET do not support user-level and
-    computer-level environment variables. On Windows, use the `Scope` parameter to check if user-level or computer-level
-    environment variables exist.
+    computer-level environment variables. On Windows, use the `Scope` parameter to check user-level or computer-level
+    environment variables.
 
     To check if a specific user has an environment variable on Windows, pass that user's credentials to the `Credential`
     parameter.
@@ -44,12 +53,25 @@ function Test-CEnvVariable
     'PATH' | Test-CEnvVariable
 
     Demonstrates that you can pipe environment variable names to `Test-CEnvVariable`.
+
+    .EXAMPLE
+    Test-CEnvVariable -Name 'PATH' -Item 'C:\Some\path'
+
+    Demonstrates how to test if an environment variable that is a list contains an item. In this example, tests if the
+    `PATH` environment variable contains `C:\Some\path`.
     #>
     [CmdletBinding(DefaultParameterSetName='CurrentUser')]
     param(
         # The name of the environment variable to check. Case-insensitive on Windows. Cse-sensitive on Linux and MacOS.
         [Parameter(Mandatory, ValueFromPipeline, ValueFromPipelineByPropertyName)]
         [String] $Name,
+
+        # The item in the environment variable to test for.
+        [String] $Item,
+
+        # The separator to use to split the environment variable into a list. By default, uses
+        # `[IO.Path]::PathSeparator` (`;` on Windows, `:` on Linux and macOS).
+        [String] $Separator,
 
         # The specific scope to check. By default, checks the current process.
         [Parameter(ParameterSetName='CurrentUser')]
@@ -81,6 +103,11 @@ function Test-CEnvVariable
         if ($null -eq $validScope)
         {
             return
+        }
+
+        if ($Item)
+        {
+            return $Item -in (Split-CEnvVariable -Name $Name -Scope $validScope -Separator $Separator)
         }
 
         return ($null -ne [Environment]::GetEnvironmentVariable($Name, $validScope))

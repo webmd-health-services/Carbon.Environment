@@ -20,7 +20,7 @@ BeforeAll {
 
     Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath '..\Carbon.Environment' -Resolve) -Verbose:$false
 
-    $script:varNamePrefix = 'CARBON_REMOVEENVVAR_'
+    $script:varNamePrefix = "CARBON_REMOVEENVVAR_$($PSVersionTable['PSEdition'])_"
     $script:varName = ''
     $script:testNum = 0
     $script:credentials = Import-Clixml -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\.cenvironment' -Resolve)
@@ -30,6 +30,8 @@ BeforeAll {
         param(
             [Parameter(Mandatory)]
             [String] $Named,
+
+            [String[]] $WithValue,
 
             [EnvironmentVariableTarget[]] $AtScope,
 
@@ -50,7 +52,14 @@ BeforeAll {
         {
             $setArgs['Scope'] = $AtScope
         }
-        Set-CEnvVariable -Name $Named -Value $PSBoundParameters['Named'] @setArgs
+
+        $value = $PSBoundParameters['Named']
+        if ($WithValue)
+        {
+            $value = $WithValue -join ([IO.Path]::PathSeparator)
+        }
+
+        Set-CEnvVariable -Name $Named -Value $value @setArgs
     }
 
     function ThenEnvVar
@@ -59,6 +68,7 @@ BeforeAll {
         param(
             [Parameter(Mandatory, Position=0)]
             [String] $Named,
+            [String[]] $WithValue,
             [switch] $Not,
             [switch] $Exists,
             [Parameter(Mandatory, ParameterSetName='ForUser')]
@@ -69,20 +79,37 @@ BeforeAll {
 
         $Named = "${script:varNamePrefix}${Named}"
 
+        $expectedValue = $null
+        if ($WithValue)
+        {
+            $expectedValue = $WithValue -join ([IO.Path]::PathSeparator)
+        }
+
         foreach ($scope in $AtScope)
         {
             if ($ForUser)
             {
-                Start-Job { $null -ne [Environment]::GetEnvironmentVariable($using:Named, $using:scope) } `
-                          -Credential $ForUser | `
-                    Receive-Job -Wait -AutoRemoveJob | `
-                    Should -Not:$Not -BeTrue
+                $value =
+                    Start-Job -ScriptBlock { [Environment]::GetEnvironmentVariable($using:Named, $using:scope) } `
+                              -Credential $ForUser |
+                        Receive-Job -Wait -AutoRemoveJob
+                $value | Should -Not:$Not -BeNullOrEmpty
+                if ($expectedValue)
+                {
+                    $value | Should -Not:$Not -Be $expectedValue
+                }
             }
             else
             {
-                Test-CEnvVariable -Name $Named -Scope $scope | Should -Not:$Not -BeTrue
+                if ($expectedValue)
+                {
+                    [Environment]::GetEnvironmentVariable($Named, $scope) | Should -Be $expectedValue
+                }
+                else
+                {
+                    Test-CEnvVariable -Name $Named -Scope $scope | Should -Not:$Not -BeTrue
+                }
             }
-
         }
     }
 
@@ -213,6 +240,7 @@ Describe 'Remove-CEnvVariable' {
             WhenRemoving $name -WithArgs @{ Credential = $script:credentials }
             ThenEnvVar $name -ForUser $script:credentials -Not -Exists
             ThenEnvVar $name -AtScope Process -Exists
+            ThenError -IsEmpty
         }
     }
 
@@ -294,5 +322,67 @@ Describe 'Remove-CEnvVariable' {
         WhenRemoving $name,$name2
         ThenEnvVar $name -AtScope Process -Not -Exists
         ThenEnvVar $name2 -AtScope Process -Not -Exists
+    }
+
+    Context 'is a list' {
+        It 'removes items' {
+            $name = '130'
+            GivenEnvVar $name -WithValue @('one', 'two', 'three', 'four')
+            WhenRemoving $name -WithArgs @{ Item = @('two', 'four') }
+            ThenEnvVar $name -AtScope Process -Exists -WithValue @('one', 'three')
+        }
+
+        Context 'item does not exist' {
+            It 'writes an error and removes items that do exist' {
+                $name = '140'
+                GivenEnvVar $name -WithValue @('one', 'two', 'three')
+                WhenRemoving $name -WithArgs @{ Item = @('three', 'five', 'six') ; ErrorAction = 'SilentlyContinue' }
+                ThenEnvVar $name -AtScope Process -Exists -WithValue @('one', 'two')
+                ThenError -Matches 'five.six.*items do not exist' -HasCount 1
+            }
+
+            It 'can exclude items from information message' {
+                $name = '140'
+                GivenEnvVar $name -WithValue @('one', 'two', 'three')
+                WhenRemoving $name -WithArgs @{ Item = @('three', 'five', 'six') ; Sensitive = $true ; ErrorAction = 'SilentlyContinue' }
+                ThenEnvVar $name -AtScope Process -Exists -WithValue @('one', 'two')
+                ThenError -Matches 'sensitive items from.*the items do not exist' -HasCount 1
+            }
+        }
+
+        It 'uses custom separator' {
+            $name = '150'
+            GivenEnvVar $name -WithValue '1|2|3|4'
+            WhenRemoving $name -WithArgs @{ Item = @('2', '3') ; Separator = '|'}
+            ThenEnvVar $name -AtScope Process -Exists -WithValue '1|4'
+        }
+
+        It 'supports WhatIf' {
+            $name = '160'
+            GivenEnvVar $name -WithValue @('a', 'b', 'c')
+            WhenRemoving $name -WithArgs @{ Item = 'b' ; WhatIf = $true }
+            ThenEnvVar $name -AtScope Process -Exists -WithValue @('a', 'b', 'c')
+        }
+
+        Context 'deleting all items from the list' {
+            $allowsEmptyEnvVar = [Environment]::Version -ge ([Version]::New(9, 0))
+            Context 'allows setting empty environment variables' -Skip:(-not $allowsEmptyEnvVar) {
+                It 'does not delete the environment variable' {
+                    $name = '170'
+                    GivenEnvVar $name -WithValue @('e', 'f', 'g')
+                    WhenRemoving $name -WithArgs @{ Item = @('e', 'f', 'g') }
+                    ThenEnvVar $name -AtScope PRocess -Exists -WithValue ''
+                }
+            }
+
+            Context 'does not allow setting empty environment variables' -Skip:$allowsEmptyEnvVar {
+                It 'deletes the environment variable' {
+                    $name = '180'
+                    GivenEnvVar $name -WithValue @('e', 'f', 'g')
+                    WhenRemoving $name -WithArgs @{ Item = @('e', 'f', 'g') }
+                    ThenEnvVar $name -AtScope Process -Not -Exists
+                }
+            }
+        }
     }
 }

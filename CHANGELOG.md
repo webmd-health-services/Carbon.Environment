@@ -33,6 +33,12 @@ If migrating from Carbon:
 * `Uninstall-CEnvVariable` function that uninstalls environment variables, but only if they exist.
 * Linux and macOS support to `Remove-CEnvVariable` and `Set-CEnvVariable` for managing process-level environment
   variables. PowerShell and .NET do not support user-level and computer-level environment variables on Linux and macOS.
+* The ability to remove individual items from an environment variable to `Remove-CEnvVariable`.
+* The ability to add individual items from an environment variable to `Set-CEnvVariable`.
+* `Remove-CEnvVariable` can now remove items from environment variables that are lists (e.g. `PATH`, `PSModulePath`,
+  etc.).
+* `Set-CEnvVariable` can now add items to an environment variable that is a list (e.g. `PATH`, `PSModulePath`, etc.).
+* `Split-CEnvVariable` to split environment variables that contain a list of values.
 
 ### Changed
 

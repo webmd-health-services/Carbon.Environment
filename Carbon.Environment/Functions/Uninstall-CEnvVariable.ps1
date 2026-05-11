@@ -3,12 +3,21 @@ function Uninstall-CEnvVariable
 {
     <#
     .SYNOPSIS
-    Removes an environment variable if it exists.
+    Removes an environment variable or an item from an environment variable, if it exists.
 
     .DESCRIPTION
-    The `Uninstall-CEnvVariable` function deletes environment variables, but only if they exist. Pass the names
-    of the environment variables to delete to the `Name` parameter (or pipe in the names). Each environment variable
-    that exists is deleted. No errors are written if an environment variable doesn't exist.
+    The `Uninstall-CEnvVariable` function deletes environment variables or items from an environment variable.
+    When deleting an environment variable, ignores if the environment variable no longer exists. When deleting an item
+    from an environment variables, ignores if the item is no longer in the environment variable.
+
+    To delete environment variables, pass their names to the `Name` parameter (or pipe in the names). Each environment
+    variable that exists is deleted.
+
+    To delete an item from an environment variable that is a list (e.g. `PATH`, `PSModulePath`, etc.), pass the name of
+    the environment variable to the `Name` parameter, and the items to remove from the environment variable to the
+    `Item` parameter. Each item that exists in the environment variable is removed. By default, the environment variable
+    is split using `[IO.Path]::PathSeparator` (`;` on Windows, `:` on Linux and macOS). Pass a custom separator to the
+    `Separator` parameter.
 
     By default, removes the current process's environment variables. PowerShell and .NET do not support user-level and
     computer-level environment variables. On Windows, use the `Scope` parameter to remove user-level and/or
@@ -74,12 +83,46 @@ function Uninstall-CEnvVariable
 
     Demonstrates that you can remove another user's user-level environment variable by passing its credentials to the
     `Credential` parameter. This runs a separate PowerShell process as that user to remove the variable.
+
+    .EXAMPLE
+    Uninstall-CEnvVariable -Name 'PATH' -Item 'C:\Some\Obsolete\Path'
+
+    Demonstrates how to remove items from an environment variable whose value is a list. In this example, the
+    `C:\Some\Obsolete\Path` path is removed from the `PATH` enviornment variable.
+
+    .EXAMPLE
+    Uninstall-CEnvVariable -Name 'PATH' -Item 'C:\Some\Obsolete\Path','C:\Some\Other\Obsolete\Path'
+
+    Demonstrates that you can pass multiple items to the `Item` parameter to remove multiple items from an environment
+    variable.
+
+    .EXAMPLE
+    Uninstall-CEnvVariable -Name 'MyPipeVar' -Item 'a' -Separator '|'
+
+    Demonstrates how to remove items from an environment variable whose value is a list that uses a custom separator. In
+    this case the `MyPipeVar` environment variable is split using a `|` character, `a` is removed, the list is joined
+    with `|` character, and the environment variable is set to the new value.
     #>
     [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName='ForCurrentUser')]
     param(
         # The environment variable to remove. Case-insensitive on Windows, case-sensitive on Linux and macOS.
         [Parameter(Mandatory, ValueFromPipeline)]
         [String[]] $Name,
+
+        # Items to remove from the environment variable. By default, the entire environment variable is removed if it
+        # exists. If one or more items are specified, the environment variable's value is split using
+        # `[IO.Path]::PathSeparator` (`;` on Windows, `:` on Linux and macOS), and each item in the list is removed. The
+        # list is joined with the path separator, and the environment variable's value is set.
+        #
+        # Use the `Separator` parameter to customize the separator to use use.
+        [String[]] $Item,
+
+        # The separator for items in the list. Ignored unless `Item` has a value.
+        [String] $Separator,
+
+        # If set and removing items from an environment variable's value, omits the values being removed from
+        # information messages.
+        [switch] $Sensitive,
 
         # The scopes at which to remove the environment variable. Defaults to the current process.
         [Parameter(ParameterSetName='ForCurrentUser')]
@@ -98,6 +141,11 @@ function Uninstall-CEnvVariable
         $userEnvVarsToDelete = [Collections.Generic.List[String]]::New()
 
         $Scope = $Scope | Assert-Scope
+
+        if (-not $PSBoundParameters.ContainsKey('Separator'))
+        {
+            $Separator = [IO.Path]::PathSeparator
+        }
     }
 
     process
@@ -118,6 +166,42 @@ function Uninstall-CEnvVariable
                 }
 
                 $target = "$($_scope.ToString().ToLowerInvariant())-level environment variable ""${_name}"""
+
+                if ($Item)
+                {
+                    $currentItems = Split-CEnvVariable -Name $_name -Scope $_scope -Separator $Separator
+                    $itemsToRemove = $currentItems | Where-Object { $_ -in $Item }
+                    if (-not $itemsToRemove)
+                    {
+                        continue
+                    }
+
+                    $newItems = $currentItems | Where-Object { $_ -notin $itemsToRemove }
+                    $newValue = $newItems -join $Separator
+                    $itemsToRemoveMsg = $itemsToRemove -join $Separator
+                    $infoItemsMsg = 'items'
+                    $targetItemsMsg = ''
+                    if (-not $Sensitive)
+                    {
+                        $infoItemsMsg = """${itemsToRemoveMsg}"""
+                        $targetItemsMsg = " '${itemsToRemoveMsg}'"
+                    }
+
+                    $suffix = ''
+                    if (($itemsToRemove | Measure-Object).Count -gt 1)
+                    {
+                        $suffix = 's'
+                    }
+
+                    if (-not $PSCmdlet.ShouldProcess($target, "remove item${suffix}${targetItemsMsg}"))
+                    {
+                        continue
+                    }
+
+                    Write-Information "Removing ${infoItemsMsg} from ${target}."
+                    [Environment]::SetEnvironmentVariable($_name, $newValue, $_scope)
+                    continue
+                }
 
                 if (-not $PSCmdlet.ShouldProcess($target, 'remove'))
                 {
