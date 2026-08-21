@@ -18,7 +18,7 @@
     RootModule = 'Carbon.Environment.psm1'
 
     # Version number of this module.
-    ModuleVersion = '0.0.0'
+    ModuleVersion = '1.0.0'
 
     # ID used to uniquely identify this module
     GUID = '158d71ce-406f-4dcd-ab30-728cf54bf3b4'
@@ -36,7 +36,7 @@
     Copyright = '(c) WebMD Health Services.'
 
     # Description of the functionality provided by this module
-    Description = ''
+    Description = 'The Carbon.Environment PowerShell module creates, sets, tests, and removes environment variables.'
 
     # Minimum version of the Windows PowerShell engine required by this module
     PowerShellVersion = '5.1'
@@ -76,6 +76,11 @@
 
     # Functions to export from this module. Only list public function here.
     FunctionsToExport = @(
+        'Remove-CEnvVariable',
+        'Set-CEnvVariable',
+        'Split-CEnvVariable',
+        'Test-CEnvVariable',
+        'Uninstall-CEnvVariable'
     )
 
     # Cmdlets to export from this module. By default, you get a script module, so there are no cmdlets.

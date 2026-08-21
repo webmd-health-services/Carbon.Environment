@@ -19,6 +19,12 @@ Set-StrictMode -Version 'Latest'
 # function appended to this file, while a module in development has its functions in the Functions directory.
 $script:moduleDirPath = $PSScriptRoot
 
+if (-not (Test-Path -Path 'variable:IsWindows'))
+{
+    $script:IsWindows = $true
+    $script:IsLinux = $script:IsMacOS = $false
+}
+
 # Store each of your module's functions in its own file in the Functions directory. On the build server, your module's
 # functions will be appended to this file, so only dot-source files that exist on the file system. This allows
 # developers to work on a module without having to build it first. Grab all the functions that are in their own files.
